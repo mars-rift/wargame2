@@ -386,7 +386,7 @@ namespace HexWargame.Core
             MapName = "River Crossing";
             InitializeOpenTerrain();
 
-            // River running through the middle
+            // River running through the middle (3 rows wide)
             for (int q = -Width / 2; q <= Width / 2; q++)
             {
                 var riverCoords = new[]
@@ -403,10 +403,11 @@ namespace HexWargame.Core
                 }
             }
 
-            // Bridges (passable spots)
+            // Bridges (clear passages through water) - strategically placed
             var bridges = new[]
             {
-                new HexCoord(-2, 0), new HexCoord(2, 0)
+                new HexCoord(-2, -1), new HexCoord(-2, 0), new HexCoord(-2, 1), // Left bridge
+                new HexCoord(2, -1), new HexCoord(2, 0), new HexCoord(2, 1)     // Right bridge
             };
 
             foreach (var bridge in bridges)
@@ -415,18 +416,31 @@ namespace HexWargame.Core
                     Terrain[bridge] = TerrainType.Open;
             }
 
-            // Cover positions near river
+            // Cover positions near river banks for tactical positioning
             var coverPositions = new[]
             {
                 new HexCoord(-3, -2), new HexCoord(3, 2), new HexCoord(-1, -3),
-                new HexCoord(1, 3), new HexCoord(-4, 0), new HexCoord(4, 0),
-                new HexCoord(0, -3), new HexCoord(0, 3)
+                new HexCoord(1, 3), new HexCoord(-4, -1), new HexCoord(4, 1),
+                new HexCoord(0, -3), new HexCoord(0, 3), new HexCoord(-3, 0),
+                new HexCoord(3, 0), new HexCoord(-1, 2), new HexCoord(1, -2)
             };
 
             foreach (var cover in coverPositions)
             {
                 if (Terrain.ContainsKey(cover))
                     Terrain[cover] = TerrainType.Cover;
+            }
+
+            // Add a few buildings near bridges for strategic importance
+            var bridgeBuildings = new[]
+            {
+                new HexCoord(-3, 1), new HexCoord(3, -1)
+            };
+
+            foreach (var building in bridgeBuildings)
+            {
+                if (Terrain.ContainsKey(building))
+                    Terrain[building] = TerrainType.Building;
             }
         }
 
