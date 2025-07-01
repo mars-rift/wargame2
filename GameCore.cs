@@ -223,27 +223,42 @@ namespace HexWargame.Core
         public int Height { get; }
         public Dictionary<HexCoord, TerrainType> Terrain { get; }
         public Dictionary<HexCoord, Unit> Units { get; }
+        public string MapName { get; private set; } = "Unknown";
 
-        public GameMap(int width = 12, int height = 10)
+        private readonly Random _random;
+
+        public GameMap(int width = 12, int height = 10, int? seed = null)
         {
             Width = width;
             Height = height;
             Terrain = new Dictionary<HexCoord, TerrainType>();
             Units = new Dictionary<HexCoord, Unit>();
-            GenerateSmallTownMap();
+            _random = seed.HasValue ? new Random(seed.Value) : new Random();
+            GenerateRandomMap();
+        }
+
+        public void GenerateRandomMap()
+        {
+            // Choose a random map layout
+            var mapLayouts = new Action[]
+            {
+                GenerateSmallTownMap,
+                GenerateForestBattlefield,
+                GenerateUrbanWarfare,
+                GenerateRiverCrossing,
+                GenerateHillsAndValleys
+            };
+
+            var selectedLayout = mapLayouts[_random.Next(mapLayouts.Length)];
+            selectedLayout();
         }
 
         public void GenerateSmallTownMap()
         {
+            MapName = "Small Town";
+            
             // Initialize with open terrain
-            for (int q = -Width / 2; q <= Width / 2; q++)
-            {
-                for (int r = -Height / 2; r <= Height / 2; r++)
-                {
-                    var coord = new HexCoord(q, r);
-                    Terrain[coord] = TerrainType.Open;
-                }
-            }
+            InitializeOpenTerrain();
 
             // Add buildings in the center (town square)
             var buildings = new[]
@@ -284,6 +299,199 @@ namespace HexWargame.Core
                 if (Terrain.ContainsKey(water))
                     Terrain[water] = TerrainType.Water;
             }
+        }
+
+        public void GenerateForestBattlefield()
+        {
+            MapName = "Forest Clearing";
+            InitializeOpenTerrain();
+
+            // Scattered trees (cover) throughout the map
+            var coverCount = _random.Next(8, 15);
+            var placedCover = new HashSet<HexCoord>();
+
+            for (int i = 0; i < coverCount; i++)
+            {
+                var attempts = 0;
+                HexCoord pos;
+                do
+                {
+                    var q = _random.Next(-Width / 2, Width / 2 + 1);
+                    var r = _random.Next(-Height / 2, Height / 2 + 1);
+                    pos = new HexCoord(q, r);
+                    attempts++;
+                } while ((placedCover.Contains(pos) || !Terrain.ContainsKey(pos) || 
+                         IsNearSpawnArea(pos)) && attempts < 50);
+
+                if (attempts < 50 && Terrain.ContainsKey(pos))
+                {
+                    Terrain[pos] = TerrainType.Cover;
+                    placedCover.Add(pos);
+                }
+            }
+
+            // Small pond in center
+            var centerWater = new[]
+            {
+                new HexCoord(0, 0), new HexCoord(1, 0), new HexCoord(0, 1)
+            };
+
+            foreach (var water in centerWater)
+            {
+                if (Terrain.ContainsKey(water))
+                    Terrain[water] = TerrainType.Water;
+            }
+        }
+
+        public void GenerateUrbanWarfare()
+        {
+            MapName = "Urban Ruins";
+            InitializeOpenTerrain();
+
+            // Multiple building clusters
+            var buildingClusters = new[]
+            {
+                new[] { new HexCoord(-2, -1), new HexCoord(-1, -1), new HexCoord(-2, 0) },
+                new[] { new HexCoord(2, 1), new HexCoord(1, 1), new HexCoord(2, 0) },
+                new[] { new HexCoord(-1, 2), new HexCoord(0, 2), new HexCoord(1, 2) },
+                new[] { new HexCoord(-1, -2), new HexCoord(0, -2), new HexCoord(1, -2) }
+            };
+
+            foreach (var cluster in buildingClusters)
+            {
+                foreach (var building in cluster)
+                {
+                    if (Terrain.ContainsKey(building))
+                        Terrain[building] = TerrainType.Building;
+                }
+            }
+
+            // Random rubble (cover)
+            var rubblePositions = new[]
+            {
+                new HexCoord(-3, -1), new HexCoord(3, 1), new HexCoord(-3, 2),
+                new HexCoord(3, -2), new HexCoord(0, 0), new HexCoord(-4, 1),
+                new HexCoord(4, -1), new HexCoord(2, -3), new HexCoord(-2, 3)
+            };
+
+            foreach (var rubble in rubblePositions)
+            {
+                if (Terrain.ContainsKey(rubble) && _random.Next(100) < 60)
+                    Terrain[rubble] = TerrainType.Cover;
+            }
+        }
+
+        public void GenerateRiverCrossing()
+        {
+            MapName = "River Crossing";
+            InitializeOpenTerrain();
+
+            // River running through the middle
+            for (int q = -Width / 2; q <= Width / 2; q++)
+            {
+                var riverCoords = new[]
+                {
+                    new HexCoord(q, -1),
+                    new HexCoord(q, 0),
+                    new HexCoord(q, 1)
+                };
+
+                foreach (var coord in riverCoords)
+                {
+                    if (Terrain.ContainsKey(coord))
+                        Terrain[coord] = TerrainType.Water;
+                }
+            }
+
+            // Bridges (passable spots)
+            var bridges = new[]
+            {
+                new HexCoord(-2, 0), new HexCoord(2, 0)
+            };
+
+            foreach (var bridge in bridges)
+            {
+                if (Terrain.ContainsKey(bridge))
+                    Terrain[bridge] = TerrainType.Open;
+            }
+
+            // Cover positions near river
+            var coverPositions = new[]
+            {
+                new HexCoord(-3, -2), new HexCoord(3, 2), new HexCoord(-1, -3),
+                new HexCoord(1, 3), new HexCoord(-4, 0), new HexCoord(4, 0),
+                new HexCoord(0, -3), new HexCoord(0, 3)
+            };
+
+            foreach (var cover in coverPositions)
+            {
+                if (Terrain.ContainsKey(cover))
+                    Terrain[cover] = TerrainType.Cover;
+            }
+        }
+
+        public void GenerateHillsAndValleys()
+        {
+            MapName = "Rocky Hills";
+            InitializeOpenTerrain();
+
+            // Central valley with cover on hills
+            var hillPositions = new[]
+            {
+                new HexCoord(-3, -2), new HexCoord(-2, -3), new HexCoord(-1, -3),
+                new HexCoord(3, 2), new HexCoord(2, 3), new HexCoord(1, 3),
+                new HexCoord(-4, 1), new HexCoord(-3, 2), new HexCoord(4, -1),
+                new HexCoord(3, -2), new HexCoord(-2, 1), new HexCoord(2, -1)
+            };
+
+            foreach (var hill in hillPositions)
+            {
+                if (Terrain.ContainsKey(hill))
+                    Terrain[hill] = TerrainType.Cover;
+            }
+
+            // Small building outpost
+            var outposts = new[]
+            {
+                new HexCoord(-1, 0), new HexCoord(1, 0)
+            };
+
+            foreach (var outpost in outposts)
+            {
+                if (Terrain.ContainsKey(outpost))
+                    Terrain[outpost] = TerrainType.Building;
+            }
+
+            // Mountain lake
+            var lakePositions = new[]
+            {
+                new HexCoord(0, -1), new HexCoord(0, 1)
+            };
+
+            foreach (var lake in lakePositions)
+            {
+                if (Terrain.ContainsKey(lake))
+                    Terrain[lake] = TerrainType.Water;
+            }
+        }
+
+        private void InitializeOpenTerrain()
+        {
+            Terrain.Clear();
+            for (int q = -Width / 2; q <= Width / 2; q++)
+            {
+                for (int r = -Height / 2; r <= Height / 2; r++)
+                {
+                    var coord = new HexCoord(q, r);
+                    Terrain[coord] = TerrainType.Open;
+                }
+            }
+        }
+
+        private bool IsNearSpawnArea(HexCoord coord)
+        {
+            // Keep spawn areas clear (top and bottom of map)
+            return Math.Abs(coord.R) >= Height / 2 - 1;
         }
 
         public bool IsValidPosition(HexCoord coord) => Terrain.ContainsKey(coord);

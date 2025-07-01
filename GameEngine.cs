@@ -239,13 +239,15 @@ namespace HexWargame.Core
         }
 
         /// <summary>
-        /// Simple AI for computer player
+        /// Intelligent AI for computer player with endgame tactics
         /// </summary>
         public async Task ExecuteAITurn()
         {
             if (CurrentTeam != Team.Blue || GameOver) return;
 
             var aiUnits = GetTeamUnits(Team.Blue);
+            var redUnits = GetTeamUnits(Team.Red);
+            var isEndgame = redUnits.Count <= 2 || aiUnits.Count <= 2;
             
             foreach (var unit in aiUnits)
             {
@@ -254,45 +256,11 @@ namespace HexWargame.Core
                 // Add delay for better visualization
                 await Task.Delay(500);
 
-                // Try to attack first
-                var targets = GetAttackTargets(unit);
-                if (targets.Count > 0 && unit.CanAttack)
-                {
-                    // Target the weakest enemy
-                    var target = targets.OrderBy(t => t.CurrentHp).First();
-                    AttackUnit(unit, target);
-                    
-                    // Add delay after attack
-                    await Task.Delay(1000);
-                }
+                // Phase 1: Try to attack first
+                await ExecuteAttackPhase(unit, redUnits, isEndgame);
 
-                // Try to move toward enemies
-                if (unit.CanMove)
-                {
-                    var redUnits = GetTeamUnits(Team.Red);
-                    if (redUnits.Count > 0)
-                    {
-                        // Find closest enemy
-                        var closestEnemy = redUnits
-                            .OrderBy(e => unit.Position.DistanceTo(e.Position))
-                            .First();
-
-                        // Get valid moves
-                        var validMoves = GetValidMoves(unit);
-                        if (validMoves.Count > 0)
-                        {
-                            // Move toward closest enemy
-                            var bestMove = validMoves
-                                .OrderBy(pos => pos.DistanceTo(closestEnemy.Position))
-                                .First();
-
-                            MoveUnit(unit, bestMove);
-                            
-                            // Add delay after move
-                            await Task.Delay(500);
-                        }
-                    }
-                }
+                // Phase 2: Strategic movement
+                await ExecuteMovementPhase(unit, redUnits, isEndgame);
             }
 
             // End AI turn
@@ -300,14 +268,130 @@ namespace HexWargame.Core
             NextTurn();
         }
 
+        private async Task ExecuteAttackPhase(Unit unit, List<Unit> enemies, bool isEndgame)
+        {
+            var targets = GetAttackTargets(unit);
+            if (targets.Count == 0 || !unit.CanAttack) return;
+
+            Unit? target = null;
+
+            if (isEndgame)
+            {
+                // Endgame: Focus on eliminating threats
+                // Priority: Low HP units that can still fight
+                target = targets
+                    .Where(t => t.CurrentHp <= unit.AttackPower + 15) // Can likely kill
+                    .OrderBy(t => t.CurrentHp)
+                    .FirstOrDefault();
+
+                // If no killable target, target highest damage dealer
+                target ??= targets
+                    .OrderByDescending(t => t.AttackPower)
+                    .ThenBy(t => t.CurrentHp)
+                    .First();
+            }
+            else
+            {
+                // Early/mid game: Target tactically
+                target = targets
+                    .OrderBy(t => t.CurrentHp) // Weakest first
+                    .ThenByDescending(t => t.AttackPower) // Then strongest
+                    .First();
+            }
+
+            AttackUnit(unit, target);
+            await Task.Delay(1000);
+        }
+
+        private async Task ExecuteMovementPhase(Unit unit, List<Unit> enemies, bool isEndgame)
+        {
+            if (!unit.CanMove || enemies.Count == 0) return;
+
+            var validMoves = GetValidMoves(unit);
+            if (validMoves.Count == 0) return;
+
+            HexCoord bestMove;
+
+            if (isEndgame)
+            {
+                // Endgame strategy: Aggressive positioning
+                bestMove = GetAggressivePosition(unit, enemies, validMoves);
+            }
+            else
+            {
+                // Normal strategy: Balanced approach
+                bestMove = GetTacticalPosition(unit, enemies, validMoves);
+            }
+
+            MoveUnit(unit, bestMove);
+            await Task.Delay(500);
+        }
+
+        private HexCoord GetAggressivePosition(Unit unit, List<Unit> enemies, List<HexCoord> validMoves)
+        {
+            // Find position that maximizes attack opportunities next turn
+            var scoredMoves = validMoves.Select(pos => new
+            {
+                Position = pos,
+                AttackOpportunities = enemies.Count(e => pos.DistanceTo(e.Position) <= unit.AttackRange),
+                DistanceToClosest = enemies.Min(e => pos.DistanceTo(e.Position)),
+                DefenseBonus = Map.GetDefenseBonus(pos)
+            }).ToList();
+
+            // Prioritize positions that enable attacks
+            return scoredMoves
+                .OrderByDescending(m => m.AttackOpportunities)
+                .ThenBy(m => m.DistanceToClosest)
+                .ThenByDescending(m => m.DefenseBonus)
+                .First().Position;
+        }
+
+        private HexCoord GetTacticalPosition(Unit unit, List<Unit> enemies, List<HexCoord> validMoves)
+        {
+            // Balanced positioning considering attack range and defense
+            var closestEnemy = enemies.OrderBy(e => unit.Position.DistanceTo(e.Position)).First();
+            
+            var scoredMoves = validMoves.Select(pos => new
+            {
+                Position = pos,
+                DistanceToEnemy = pos.DistanceTo(closestEnemy.Position),
+                DefenseBonus = Map.GetDefenseBonus(pos),
+                CanAttackNext = pos.DistanceTo(closestEnemy.Position) <= unit.AttackRange
+            }).ToList();
+
+            // Move to attack range if possible, otherwise get closer while seeking cover
+            return scoredMoves
+                .OrderByDescending(m => m.CanAttackNext ? 1 : 0)
+                .ThenBy(m => m.DistanceToEnemy)
+                .ThenByDescending(m => m.DefenseBonus)
+                .First().Position;
+        }
+
         /// <summary>
-        /// Reset the game to initial state
+        /// Reset the game to initial state with a new random map
         /// </summary>
         public void Reset()
         {
             Map.Units.Clear();
             Map.Terrain.Clear();
-            Map.GenerateSmallTownMap();
+            Map.GenerateRandomMap();
+            
+            CurrentTeam = Team.Red;
+            TurnNumber = 1;
+            GameOver = false;
+            Winner = null;
+            
+            SetupSquads();
+        }
+
+        /// <summary>
+        /// Reset the game with a specific map layout
+        /// </summary>
+        public void ResetWithMap(Action mapGenerator)
+        {
+            Map.Units.Clear();
+            Map.Terrain.Clear();
+            mapGenerator();
             
             CurrentTeam = Team.Red;
             TurnNumber = 1;
@@ -332,7 +416,8 @@ namespace HexWargame.Core
                 ["RedUnitsAlive"] = redUnits.Count,
                 ["BlueUnitsAlive"] = blueUnits.Count,
                 ["GameOver"] = GameOver,
-                ["Winner"] = Winner?.ToString() ?? "None"
+                ["Winner"] = Winner?.ToString() ?? "None",
+                ["MapName"] = Map.MapName
             };
         }
     }

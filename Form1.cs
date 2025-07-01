@@ -36,6 +36,7 @@ public partial class MainForm : Form
 
         // Button events
         newGameButton.Click += OnNewGameClicked;
+        newMapButton.Click += OnNewMapClicked;
         endTurnButton.Click += OnEndTurnClicked;
         helpButton.Click += OnHelpClicked;
     }
@@ -46,6 +47,7 @@ public partial class MainForm : Form
         
         gameInfoLabel.Text = $"Turn {stats["TurnNumber"]}";
         currentTeamLabel.Text = $"Current Team: {stats["CurrentTeam"]}";
+        mapNameLabel.Text = $"Map: {stats["MapName"]}";
         
         if (hexGridControl.SelectedUnit != null)
         {
@@ -133,6 +135,20 @@ public partial class MainForm : Form
         {
             _game.Reset();
             hexGridControl.ClearSelection();
+            UpdateUI();
+        }
+    }
+
+    private void OnNewMapClicked(object? sender, EventArgs e)
+    {
+        var result = MessageBox.Show("Generate a new random map? Current game will be reset.", "New Map", 
+                                   MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        
+        if (result == DialogResult.Yes)
+        {
+            _game.Reset();
+            hexGridControl.ClearSelection();
+            hexGridControl.CenterView();
             UpdateUI();
         }
     }
