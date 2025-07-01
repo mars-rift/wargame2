@@ -1,4 +1,4 @@
-# Hex Wargame - .NET Windows Forms Edition
+# Hex Wargame - .NET Game
 
 A turn-based tactical strategy game where two squads battle in a small town setting. Built with .NET 8 and Windows Forms using a hexagonal grid system for authentic tactical gameplay with a modern graphical interface.
 
