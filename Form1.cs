@@ -111,9 +111,40 @@ public partial class MainForm : Form
 
     private void OnGameEnded(object? sender, EventArgs e)
     {
-        var winner = _game.Winner?.ToString() ?? "Nobody";
-        ShowMessage($"Game Over! {winner} team wins!\nGame lasted {_game.TurnNumber} turns.", "Victory!");
         UpdateUI();
+        
+        // Show game over screen with detailed statistics
+        var gameStats = _game.GetGameStats();
+        var winner = _game.Winner ?? Team.Red; // Fallback, should never be null here
+        
+        using var gameOverForm = new GameOverForm(gameStats, winner);
+        var result = gameOverForm.ShowDialog(this);
+        
+        if (result == DialogResult.OK)
+        {
+            var action = gameOverForm.Tag?.ToString();
+            switch (action)
+            {
+                case "NewGame":
+                    _game.Reset();
+                    hexGridControl.ClearSelection();
+                    hexGridControl.CenterView();
+                    UpdateUI();
+                    break;
+                    
+                case "NewMap":
+                    _game.Reset(); // This generates a new random map
+                    hexGridControl.ClearSelection();
+                    hexGridControl.CenterView();
+                    UpdateUI();
+                    break;
+            }
+        }
+        else
+        {
+            // User chose to exit
+            Application.Exit();
+        }
     }
 
     private void OnUnitSelected(object? sender, Unit unit)

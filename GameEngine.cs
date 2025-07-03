@@ -27,6 +27,14 @@ namespace HexWargame.Core
         public bool GameOver { get; private set; }
         public Team? Winner { get; private set; }
 
+        // Game statistics tracking
+        public int TotalAttacks { get; private set; }
+        public int SuccessfulAttacks { get; private set; }
+        public int UnitsKilled { get; private set; }
+        public int RedUnitsLost { get; private set; }
+        public int BlueUnitsLost { get; private set; }
+        public DateTime GameStartTime { get; private set; }
+
         private readonly Random _random;
 
         public event EventHandler<Team>? TeamChanged;
@@ -40,6 +48,7 @@ namespace HexWargame.Core
             CurrentTeam = Team.Red;
             TurnNumber = 1;
             _random = new Random();
+            GameStartTime = DateTime.Now;
             SetupSquads();
         }
 
@@ -177,8 +186,13 @@ namespace HexWargame.Core
                 TargetKilled = false
             };
 
+            // Track attack statistics
+            TotalAttacks++;
+            
             if (hit)
             {
+                SuccessfulAttacks++;
+                
                 // Calculate damage
                 var baseDamage = attacker.AttackPower;
                 var damageVariance = _random.Next(-10, 11);
@@ -190,6 +204,12 @@ namespace HexWargame.Core
 
                 if (!target.IsAlive)
                 {
+                    UnitsKilled++;
+                    if (target.Team == Team.Red)
+                        RedUnitsLost++;
+                    else
+                        BlueUnitsLost++;
+                        
                     Map.RemoveUnit(target.Position);
                 }
             }
@@ -252,6 +272,9 @@ namespace HexWargame.Core
             
             var isEndgame = redUnits.Count <= 2 || aiUnits.Count <= 2;
             
+            // Coordinate focus fire - prioritize targets multiple units can attack
+            var focusTargets = GetFocusFireTargets(aiUnits, redUnits);
+            
             foreach (var unit in aiUnits.ToList()) // ToList to avoid collection modification issues
             {
                 if (!unit.IsAlive) continue;
@@ -259,8 +282,8 @@ namespace HexWargame.Core
                 // Add delay for better visualization
                 await Task.Delay(500);
 
-                // Phase 1: Try to attack first
-                await ExecuteAttackPhase(unit, isEndgame);
+                // Phase 1: Try to attack first (with focus fire coordination)
+                await ExecuteAttackPhase(unit, isEndgame, focusTargets);
 
                 // Phase 2: Strategic movement (recalculate enemies in case one was eliminated)
                 var currentEnemies = GetTeamUnits(Team.Red);
@@ -272,7 +295,7 @@ namespace HexWargame.Core
                 // Phase 3: Attack again if moved into range
                 if (unit.CanAttack)
                 {
-                    await ExecuteAttackPhase(unit, isEndgame);
+                    await ExecuteAttackPhase(unit, isEndgame, focusTargets);
                 }
             }
 
@@ -281,12 +304,25 @@ namespace HexWargame.Core
             NextTurn();
         }
 
-        private async Task ExecuteAttackPhase(Unit unit, bool isEndgame)
+        private Dictionary<Unit, int> GetFocusFireTargets(List<Unit> aiUnits, List<Unit> enemies)
+        {
+            var targetPriority = new Dictionary<Unit, int>();
+            
+            foreach (var enemy in enemies)
+            {
+                var unitsInRange = aiUnits.Count(ai => ai.Position.DistanceTo(enemy.Position) <= ai.AttackRange && ai.CanAttack);
+                targetPriority[enemy] = unitsInRange;
+            }
+            
+            return targetPriority;
+        }
+
+        private async Task ExecuteAttackPhase(Unit unit, bool isEndgame, Dictionary<Unit, int>? focusTargets = null)
         {
             var targets = GetAttackTargets(unit);
             if (targets.Count == 0 || !unit.CanAttack) return;
 
-            Unit? target = SelectBestTarget(unit, targets, isEndgame);
+            Unit? target = SelectBestTarget(unit, targets, isEndgame, focusTargets);
             
             if (target != null)
             {
@@ -295,7 +331,7 @@ namespace HexWargame.Core
             }
         }
 
-        private Unit SelectBestTarget(Unit attacker, List<Unit> targets, bool isEndgame)
+        private Unit SelectBestTarget(Unit attacker, List<Unit> targets, bool isEndgame, Dictionary<Unit, int>? focusTargets = null)
         {
             if (targets.Count == 0) return null!;
 
@@ -309,20 +345,57 @@ namespace HexWargame.Core
 
                 if (killableTargets.Count > 0)
                 {
+                    // Prefer targets that multiple units can focus fire on
+                    if (focusTargets != null)
+                    {
+                        var bestFocusTarget = killableTargets
+                            .Where(t => focusTargets.ContainsKey(t))
+                            .OrderByDescending(t => focusTargets[t])
+                            .ThenByDescending(t => t.AttackPower)
+                            .FirstOrDefault();
+                        
+                        if (bestFocusTarget != null)
+                            return bestFocusTarget;
+                    }
+                    
                     return killableTargets
                         .OrderByDescending(t => t.AttackPower) // Kill strongest attacker first
                         .ThenBy(t => t.CurrentHp)
                         .First();
                 }
 
-                // Priority 2: Highest threat units
+                // Priority 2: Highest threat units (with focus fire consideration)
+                if (focusTargets != null)
+                {
+                    var focusTarget = targets
+                        .Where(t => focusTargets.ContainsKey(t) && focusTargets[t] > 1)
+                        .OrderByDescending(t => focusTargets[t])
+                        .ThenByDescending(t => CalculateThreatLevel(attacker, t))
+                        .FirstOrDefault();
+                    
+                    if (focusTarget != null)
+                        return focusTarget;
+                }
+                
                 return targets
                     .OrderByDescending(t => CalculateThreatLevel(attacker, t))
                     .First();
             }
             else
             {
-                // Early/mid game: Balanced targeting
+                // Early/mid game: Balanced targeting with coordination
+                if (focusTargets != null)
+                {
+                    var coordinatedTarget = targets
+                        .Where(t => focusTargets.ContainsKey(t) && focusTargets[t] > 1)
+                        .OrderByDescending(t => focusTargets[t])
+                        .ThenByDescending(t => CalculateTargetPriority(attacker, t))
+                        .FirstOrDefault();
+                    
+                    if (coordinatedTarget != null)
+                        return coordinatedTarget;
+                }
+                
                 return targets
                     .OrderByDescending(t => CalculateTargetPriority(attacker, t))
                     .First();
@@ -469,6 +542,14 @@ namespace HexWargame.Core
             GameOver = false;
             Winner = null;
             
+            // Reset statistics
+            TotalAttacks = 0;
+            SuccessfulAttacks = 0;
+            UnitsKilled = 0;
+            RedUnitsLost = 0;
+            BlueUnitsLost = 0;
+            GameStartTime = DateTime.Now;
+            
             SetupSquads();
         }
 
@@ -496,6 +577,7 @@ namespace HexWargame.Core
         {
             var redUnits = GetTeamUnits(Team.Red);
             var blueUnits = GetTeamUnits(Team.Blue);
+            var gameDuration = DateTime.Now - GameStartTime;
 
             return new Dictionary<string, object>
             {
@@ -505,7 +587,15 @@ namespace HexWargame.Core
                 ["BlueUnitsAlive"] = blueUnits.Count,
                 ["GameOver"] = GameOver,
                 ["Winner"] = Winner?.ToString() ?? "None",
-                ["MapName"] = Map.MapName
+                ["MapName"] = Map.MapName,
+                ["TotalAttacks"] = TotalAttacks,
+                ["SuccessfulAttacks"] = SuccessfulAttacks,
+                ["AttackAccuracy"] = TotalAttacks > 0 ? (double)SuccessfulAttacks / TotalAttacks * 100 : 0,
+                ["UnitsKilled"] = UnitsKilled,
+                ["RedUnitsLost"] = RedUnitsLost,
+                ["BlueUnitsLost"] = BlueUnitsLost,
+                ["GameDuration"] = gameDuration,
+                ["GameStartTime"] = GameStartTime
             };
         }
     }
