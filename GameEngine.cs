@@ -54,19 +54,22 @@ namespace HexWargame.Core
 
         private void SetupSquads()
         {
-            // Red team (top side)
+            // Calculate actual map edges dynamically
+            var mapEdge = Map.Height / 2; // For 18x14 map, this is 7
+            
+            // Red team (top side) - place at the actual top edge
             var redPositions = new[]
             {
-                new HexCoord(-2, -4), new HexCoord(-1, -4), 
-                new HexCoord(0, -4), new HexCoord(1, -4)
+                new HexCoord(-2, -mapEdge), new HexCoord(-1, -mapEdge), 
+                new HexCoord(0, -mapEdge), new HexCoord(1, -mapEdge)
             };
             var redUnits = new[] { UnitType.Infantry, UnitType.Sniper, UnitType.Heavy, UnitType.Medic };
 
-            // Blue team (bottom side)
+            // Blue team (bottom side) - place at the actual bottom edge
             var bluePositions = new[]
             {
-                new HexCoord(-2, 4), new HexCoord(-1, 4), 
-                new HexCoord(0, 4), new HexCoord(1, 4)
+                new HexCoord(-2, mapEdge), new HexCoord(-1, mapEdge), 
+                new HexCoord(0, mapEdge), new HexCoord(1, mapEdge)
             };
             var blueUnits = new[] { UnitType.Infantry, UnitType.Sniper, UnitType.Heavy, UnitType.Medic };
 

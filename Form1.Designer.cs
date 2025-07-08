@@ -35,6 +35,9 @@ partial class MainForm
         mapNameLabel = new Label();
         selectedUnitLabel = new Label();
         unitStatsLabel = new Label();
+        damageLogPanel = new Panel();
+        damageLogLabel = new Label();
+        damageLogTextBox = new TextBox();
         buttonPanel = new Panel();
         newGameButton = new Button();
         newMapButton = new Button();
@@ -48,11 +51,12 @@ partial class MainForm
         hexGridControl.Dock = DockStyle.Fill;
         hexGridControl.Location = new Point(0, 0);
         hexGridControl.Name = "hexGridControl";
-        hexGridControl.Size = new Size(600, 500);
+        hexGridControl.Size = new Size(600, 400);
         hexGridControl.TabIndex = 0;
         // 
         // statusPanel
         // 
+        statusPanel.Controls.Add(buttonPanel);
         statusPanel.Controls.Add(unitStatsLabel);
         statusPanel.Controls.Add(selectedUnitLabel);
         statusPanel.Controls.Add(mapNameLabel);
@@ -61,7 +65,7 @@ partial class MainForm
         statusPanel.Dock = DockStyle.Right;
         statusPanel.Location = new Point(600, 0);
         statusPanel.Name = "statusPanel";
-        statusPanel.Size = new Size(200, 500);
+        statusPanel.Size = new Size(200, 400);
         statusPanel.TabIndex = 1;
         statusPanel.BackColor = Color.LightGray;
         // 
@@ -110,17 +114,53 @@ partial class MainForm
         unitStatsLabel.TabIndex = 4;
         unitStatsLabel.Text = "";
         // 
+        // damageLogPanel
+        // 
+        damageLogPanel.Controls.Add(damageLogTextBox);
+        damageLogPanel.Controls.Add(damageLogLabel);
+        damageLogPanel.Dock = DockStyle.Bottom;
+        damageLogPanel.Location = new Point(0, 400);
+        damageLogPanel.Name = "damageLogPanel";
+        damageLogPanel.Size = new Size(800, 120);
+        damageLogPanel.TabIndex = 5;
+        damageLogPanel.BackColor = Color.DarkGray;
+        // 
+        // damageLogLabel
+        // 
+        damageLogLabel.Font = new Font("Arial", 10F, FontStyle.Bold);
+        damageLogLabel.ForeColor = Color.White;
+        damageLogLabel.Location = new Point(10, 5);
+        damageLogLabel.Name = "damageLogLabel";
+        damageLogLabel.Size = new Size(200, 25);
+        damageLogLabel.TabIndex = 0;
+        damageLogLabel.Text = "Combat Log";
+        // 
+        // damageLogTextBox
+        // 
+        damageLogTextBox.BackColor = Color.Black;
+        damageLogTextBox.ForeColor = Color.Lime;
+        damageLogTextBox.Font = new Font("Consolas", 9F);
+        damageLogTextBox.Location = new Point(10, 30);
+        damageLogTextBox.Multiline = true;
+        damageLogTextBox.Name = "damageLogTextBox";
+        damageLogTextBox.ReadOnly = true;
+        damageLogTextBox.ScrollBars = ScrollBars.Vertical;
+        damageLogTextBox.Size = new Size(780, 80);
+        damageLogTextBox.TabIndex = 1;
+        damageLogTextBox.TabStop = false;
+        damageLogTextBox.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        // 
         // buttonPanel
         // 
         buttonPanel.Controls.Add(helpButton);
         buttonPanel.Controls.Add(endTurnButton);
         buttonPanel.Controls.Add(newMapButton);
         buttonPanel.Controls.Add(newGameButton);
-        buttonPanel.Dock = DockStyle.Bottom;
-        buttonPanel.Location = new Point(600, 400);
+        buttonPanel.Dock = DockStyle.None;
+        buttonPanel.Location = new Point(10, 250);
         buttonPanel.Name = "buttonPanel";
-        buttonPanel.Size = new Size(200, 100);
-        buttonPanel.TabIndex = 5;
+        buttonPanel.Size = new Size(180, 100);
+        buttonPanel.TabIndex = 6;
         buttonPanel.BackColor = Color.LightGray;
         // 
         // newGameButton
@@ -163,10 +203,10 @@ partial class MainForm
         // 
         AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
-        ClientSize = new Size(800, 500);
+        ClientSize = new Size(800, 520);
         Controls.Add(hexGridControl);
-        Controls.Add(buttonPanel);
         Controls.Add(statusPanel);
+        Controls.Add(damageLogPanel);
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
         Text = "Hex Wargame - Two Squads Battle";
@@ -182,6 +222,9 @@ partial class MainForm
     private Label mapNameLabel;
     private Label selectedUnitLabel;
     private Label unitStatsLabel;
+    private Panel damageLogPanel;
+    private Label damageLogLabel;
+    private TextBox damageLogTextBox;
     private Panel buttonPanel;
     private Button newGameButton;
     private Button newMapButton;

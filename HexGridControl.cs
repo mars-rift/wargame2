@@ -15,9 +15,11 @@ namespace HexWargame.UI
         private List<Unit> _validTargets = new();
         
         // Rendering settings
-        private const float HexSize = 30f;
-        private const float HexWidth = HexSize * 2f;
-        private static readonly float HexHeight = (float)(Math.Sqrt(3) * HexSize);
+        private float _hexSize = 30f;
+        private float _scale = 1.0f;
+        private const float BaseHexSize = 30f; // Reasonable base size for visibility
+        private float HexWidth => _hexSize * 2f;
+        private float HexHeight => (float)(Math.Sqrt(3) * _hexSize);
         
         // Colors
         private readonly Color _gridColor = Color.Black;
@@ -89,6 +91,7 @@ namespace HexWargame.UI
             Name = "HexGridControl";
             Size = new Size(600, 500);
             MouseClick += HexGridControl_MouseClick;
+            Resize += HexGridControl_Resize;
             ResumeLayout(false);
         }
 
@@ -163,10 +166,10 @@ namespace HexWargame.UI
 
                 var center = GetHexCenter(unit.Position);
                 var unitRect = new RectangleF(
-                    center.X - HexSize * 0.6f, 
-                    center.Y - HexSize * 0.6f,
-                    HexSize * 1.2f, 
-                    HexSize * 1.2f);
+                    center.X - _hexSize * 0.6f, 
+                    center.Y - _hexSize * 0.6f,
+                    _hexSize * 1.2f, 
+                    _hexSize * 1.2f);
 
                 // Draw unit background
                 var isSelected = unit == _selectedUnit;
@@ -202,9 +205,9 @@ namespace HexWargame.UI
 
         private void DrawHealthBar(Graphics g, Unit unit, PointF center)
         {
-            var barWidth = HexSize * 1.2f;
+            var barWidth = _hexSize * 1.2f;
             var barHeight = 4f;
-            var barY = center.Y + HexSize * 0.8f;
+            var barY = center.Y + _hexSize * 0.8f;
             
             var healthPercent = (float)unit.CurrentHp / unit.MaxHp;
             var healthColor = healthPercent > 0.6f ? Color.Green :
@@ -239,8 +242,11 @@ namespace HexWargame.UI
 
         private PointF GetHexCenter(HexCoord coord)
         {
-            var pixel = coord.ToPixel(HexSize);
-            return new PointF(pixel.X + _offset.X, pixel.Y + _offset.Y);
+            // Use base hex size for pixel calculation, then apply scale and offset
+            var basePixel = coord.ToPixel(BaseHexSize);
+            return new PointF(
+                basePixel.X * _scale + _offset.X, 
+                basePixel.Y * _scale + _offset.Y);
         }
 
         private GraphicsPath CreateHexPath(PointF center)
@@ -252,8 +258,8 @@ namespace HexWargame.UI
             {
                 var angle = Math.PI / 3 * i;
                 points[i] = new PointF(
-                    center.X + (float)(HexSize * Math.Cos(angle)),
-                    center.Y + (float)(HexSize * Math.Sin(angle)));
+                    center.X + (float)(_hexSize * Math.Cos(angle)),
+                    center.Y + (float)(_hexSize * Math.Sin(angle)));
             }
             
             path.AddPolygon(points);
@@ -265,7 +271,7 @@ namespace HexWargame.UI
             if (_game?.Map == null) return null;
 
             var adjustedPos = new PointF(mousePos.X - _offset.X, mousePos.Y - _offset.Y);
-            var coord = HexCoord.FromPixel(adjustedPos, HexSize);
+            var coord = HexCoord.FromPixel(adjustedPos, _hexSize);
             
             return _game.Map.IsValidPosition(coord) ? coord : null;
         }
@@ -312,6 +318,15 @@ namespace HexWargame.UI
             HexClicked?.Invoke(this, coord);
         }
 
+        private void HexGridControl_Resize(object? sender, EventArgs e)
+        {
+            // Recalculate view when control is resized
+            if (_game?.Map != null)
+            {
+                CenterView();
+            }
+        }
+
         private void UpdateValidActions()
         {
             _validMoves.Clear();
@@ -349,11 +364,53 @@ namespace HexWargame.UI
         }
 
         /// <summary>
-        /// Center the view on the map
+        /// Center the view on the map and scale to fit the available space
         /// </summary>
         public void CenterView()
         {
-            _offset = new PointF(Width / 2f, Height / 2f);
+            if (_game?.Map == null) return;
+
+            // Ensure we have a valid control size before calculating
+            if (Width <= 0 || Height <= 0) return;
+
+            // Get map bounds
+            var coords = _game.Map.Terrain.Keys.ToList();
+            if (!coords.Any()) return;
+
+            var minQ = coords.Min(c => c.Q);
+            var maxQ = coords.Max(c => c.Q);
+            var minR = coords.Min(c => c.R);
+            var maxR = coords.Max(c => c.R);
+
+            // Calculate map dimensions in pixels at base scale
+            var topLeft = new HexCoord(minQ, minR).ToPixel(BaseHexSize);
+            var bottomRight = new HexCoord(maxQ, maxR).ToPixel(BaseHexSize);
+            
+            var mapWidth = Math.Abs(bottomRight.X - topLeft.X) + BaseHexSize * 2;
+            var mapHeight = Math.Abs(bottomRight.Y - topLeft.Y) + BaseHexSize * 2;
+
+            // Calculate scale to fit the map in the available space (with minimal padding)
+            var availableWidth = Width - 40; // Reasonable padding
+            var availableHeight = Height - 40; // Reasonable padding
+
+            var scaleX = availableWidth / mapWidth;
+            var scaleY = availableHeight / mapHeight;
+            _scale = Math.Min(scaleX, scaleY);
+            
+            // Reasonable scaling limits - not too small, not too large
+            _scale = Math.Max(0.5f, Math.Min(2.5f, _scale)); // Keep scale between 0.5x and 2.5x
+            
+            _hexSize = BaseHexSize * _scale;
+
+            // Calculate map center in pixel coordinates at base scale
+            var mapCenterX = (topLeft.X + bottomRight.X) / 2;
+            var mapCenterY = (topLeft.Y + bottomRight.Y) / 2;
+
+            // Set offset to center the scaled map in the control
+            _offset = new PointF(
+                Width / 2f - mapCenterX * _scale,
+                Height / 2f - mapCenterY * _scale);
+
             Invalidate();
         }
 

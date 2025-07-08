@@ -227,7 +227,7 @@ namespace HexWargame.Core
 
         private readonly Random _random;
 
-        public GameMap(int width = 12, int height = 10, int? seed = null)
+        public GameMap(int width = 18, int height = 14, int? seed = null)
         {
             Width = width;
             Height = height;
@@ -260,12 +260,14 @@ namespace HexWargame.Core
             // Initialize with open terrain
             InitializeOpenTerrain();
 
-            // Add buildings in the center (town square)
+            // Add buildings in the center (town square) - larger town center
             var buildings = new[]
             {
                 new HexCoord(-1, 0), new HexCoord(0, 0), new HexCoord(1, 0),
                 new HexCoord(-1, 1), new HexCoord(1, -1),
-                new HexCoord(0, 2), new HexCoord(0, -2)
+                new HexCoord(0, 2), new HexCoord(0, -2),
+                new HexCoord(-2, -1), new HexCoord(2, 1),  // Extended buildings
+                new HexCoord(-1, -2), new HexCoord(1, 2)   // More buildings
             };
 
             foreach (var building in buildings)
@@ -274,12 +276,16 @@ namespace HexWargame.Core
                     Terrain[building] = TerrainType.Building;
             }
 
-            // Add some cover positions
+            // Add some cover positions - more spread out
             var coverPositions = new[]
             {
                 new HexCoord(-3, 1), new HexCoord(3, -1),
                 new HexCoord(-2, -2), new HexCoord(2, 2),
-                new HexCoord(-4, 0), new HexCoord(4, 0)
+                new HexCoord(-4, 0), new HexCoord(4, 0),
+                new HexCoord(-5, -1), new HexCoord(5, 1),  // Extended coverage
+                new HexCoord(-3, 3), new HexCoord(3, -3),
+                new HexCoord(-6, 0), new HexCoord(6, 0),
+                new HexCoord(0, -4), new HexCoord(0, 4)
             };
 
             foreach (var cover in coverPositions)
@@ -288,10 +294,11 @@ namespace HexWargame.Core
                     Terrain[cover] = TerrainType.Cover;
             }
 
-            // Add water obstacle
+            // Add water obstacle - extended but away from spawn areas
             var waterPositions = new[]
             {
-                new HexCoord(-1, -3), new HexCoord(0, -3), new HexCoord(1, -3)
+                new HexCoord(-2, -3), new HexCoord(-1, -3), new HexCoord(0, -3), 
+                new HexCoord(1, -3), new HexCoord(2, -3)
             };
 
             foreach (var water in waterPositions)
@@ -306,8 +313,8 @@ namespace HexWargame.Core
             MapName = "Forest Clearing";
             InitializeOpenTerrain();
 
-            // Scattered trees (cover) throughout the map
-            var coverCount = _random.Next(8, 15);
+            // Scattered trees (cover) throughout the map - more for larger map
+            var coverCount = _random.Next(15, 25);
             var placedCover = new HashSet<HexCoord>();
 
             for (int i = 0; i < coverCount; i++)
@@ -330,10 +337,11 @@ namespace HexWargame.Core
                 }
             }
 
-            // Small pond in center
+            // Larger pond in center
             var centerWater = new[]
             {
-                new HexCoord(0, 0), new HexCoord(1, 0), new HexCoord(0, 1)
+                new HexCoord(-1, 0), new HexCoord(0, 0), new HexCoord(1, 0),
+                new HexCoord(0, 1), new HexCoord(0, -1)
             };
 
             foreach (var water in centerWater)
@@ -348,13 +356,18 @@ namespace HexWargame.Core
             MapName = "Urban Ruins";
             InitializeOpenTerrain();
 
-            // Multiple building clusters
+            // Multiple building clusters - expanded for larger map
             var buildingClusters = new[]
             {
                 new[] { new HexCoord(-2, -1), new HexCoord(-1, -1), new HexCoord(-2, 0) },
                 new[] { new HexCoord(2, 1), new HexCoord(1, 1), new HexCoord(2, 0) },
                 new[] { new HexCoord(-1, 2), new HexCoord(0, 2), new HexCoord(1, 2) },
-                new[] { new HexCoord(-1, -2), new HexCoord(0, -2), new HexCoord(1, -2) }
+                new[] { new HexCoord(-1, -2), new HexCoord(0, -2), new HexCoord(1, -2) },
+                // Additional clusters for larger map
+                new[] { new HexCoord(-4, -2), new HexCoord(-3, -2), new HexCoord(-4, -1) },
+                new[] { new HexCoord(4, 2), new HexCoord(3, 2), new HexCoord(4, 1) },
+                new[] { new HexCoord(-5, 1), new HexCoord(-4, 1), new HexCoord(-5, 0) },
+                new[] { new HexCoord(5, -1), new HexCoord(4, -1), new HexCoord(5, 0) }
             };
 
             foreach (var cluster in buildingClusters)
@@ -366,12 +379,17 @@ namespace HexWargame.Core
                 }
             }
 
-            // Random rubble (cover)
+            // Random rubble (cover) - more spread across larger map
             var rubblePositions = new[]
             {
                 new HexCoord(-3, -1), new HexCoord(3, 1), new HexCoord(-3, 2),
                 new HexCoord(3, -2), new HexCoord(0, 0), new HexCoord(-4, 1),
-                new HexCoord(4, -1), new HexCoord(2, -3), new HexCoord(-2, 3)
+                new HexCoord(4, -1), new HexCoord(2, -3), new HexCoord(-2, 3),
+                // Additional rubble for larger map
+                new HexCoord(-6, 0), new HexCoord(6, 0), new HexCoord(0, -4),
+                new HexCoord(0, 4), new HexCoord(-5, -2), new HexCoord(5, 2),
+                new HexCoord(-7, 1), new HexCoord(7, -1), new HexCoord(-2, -4),
+                new HexCoord(2, 4), new HexCoord(-6, 2), new HexCoord(6, -2)
             };
 
             foreach (var rubble in rubblePositions)
@@ -449,13 +467,20 @@ namespace HexWargame.Core
             MapName = "Rocky Hills";
             InitializeOpenTerrain();
 
-            // Central valley with cover on hills
+            // Central valley with cover on hills - expanded for larger map
             var hillPositions = new[]
             {
                 new HexCoord(-3, -2), new HexCoord(-2, -3), new HexCoord(-1, -3),
                 new HexCoord(3, 2), new HexCoord(2, 3), new HexCoord(1, 3),
                 new HexCoord(-4, 1), new HexCoord(-3, 2), new HexCoord(4, -1),
-                new HexCoord(3, -2), new HexCoord(-2, 1), new HexCoord(2, -1)
+                new HexCoord(3, -2), new HexCoord(-2, 1), new HexCoord(2, -1),
+                // Additional hills for larger map
+                new HexCoord(-6, -1), new HexCoord(-5, -2), new HexCoord(-4, -3),
+                new HexCoord(6, 1), new HexCoord(5, 2), new HexCoord(4, 3),
+                new HexCoord(-7, 0), new HexCoord(-6, 1), new HexCoord(-5, 2),
+                new HexCoord(7, 0), new HexCoord(6, -1), new HexCoord(5, -2),
+                new HexCoord(-3, -4), new HexCoord(3, 4), new HexCoord(-4, 3),
+                new HexCoord(4, -3), new HexCoord(-8, 1), new HexCoord(8, -1)
             };
 
             foreach (var hill in hillPositions)
@@ -464,10 +489,11 @@ namespace HexWargame.Core
                     Terrain[hill] = TerrainType.Cover;
             }
 
-            // Small building outpost
+            // Small building outpost - more spread out
             var outposts = new[]
             {
-                new HexCoord(-1, 0), new HexCoord(1, 0)
+                new HexCoord(-1, 0), new HexCoord(1, 0),
+                new HexCoord(-3, 0), new HexCoord(3, 0)  // Additional outposts
             };
 
             foreach (var outpost in outposts)
@@ -476,10 +502,11 @@ namespace HexWargame.Core
                     Terrain[outpost] = TerrainType.Building;
             }
 
-            // Mountain lake
+            // Mountain lake - larger
             var lakePositions = new[]
             {
-                new HexCoord(0, -1), new HexCoord(0, 1)
+                new HexCoord(0, -1), new HexCoord(0, 1),
+                new HexCoord(-1, 1), new HexCoord(1, -1)  // Expanded lake
             };
 
             foreach (var lake in lakePositions)

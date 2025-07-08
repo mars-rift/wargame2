@@ -7,19 +7,32 @@ public partial class MainForm : Form
 {
     private Game _game = null!;
     private bool _aiTurnInProgress;
+    private List<string> _damageLog = new List<string>();
 
     public MainForm()
     {
         InitializeComponent();
         InitializeGame();
         SetupEventHandlers();
+        
+        // Call CenterView after form is loaded and sized
+        this.Load += MainForm_Load;
+    }
+
+    private void MainForm_Load(object? sender, EventArgs e)
+    {
+        // Ensure the control is properly sized, then center the view
+        hexGridControl.CenterView();
+        UpdateUI(); // Make sure UI is updated after centering
     }
 
     private void InitializeGame()
     {
         _game = new Game();
         hexGridControl.Game = _game;
-        hexGridControl.CenterView();
+        // Don't call CenterView here - wait until form is shown
+        AddToDamageLog("🎮 Welcome to Hex Wargame!");
+        AddToDamageLog($"🗺️ Map: {_game.Map.MapName}");
         UpdateUI();
     }
 
@@ -77,36 +90,95 @@ public partial class MainForm : Form
     {
         UpdateUI();
         
+        // Show round transition when Red team starts (new round)
+        if (newTeam == Team.Red && _game.TurnNumber > 1)
+        {
+            ShowRoundTransition();
+        }
+        
         // If it's AI's turn, execute AI moves
         if (newTeam == Team.Blue && !_game.GameOver)
         {
             _aiTurnInProgress = true;
             endTurnButton.Enabled = false;
             
+            AddToDamageLog("🤖 AI Turn Starting...");
             await Task.Delay(1000); // Brief pause before AI starts
             await _game.ExecuteAITurn();
             
+            AddToDamageLog("🤖 AI Turn Complete");
             _aiTurnInProgress = false;
             UpdateUI();
         }
     }
 
+    private void ShowRoundTransition()
+    {
+        var stats = _game.GetGameStats();
+        var redUnits = (int)stats["RedUnitsAlive"];
+        var blueUnits = (int)stats["BlueUnitsAlive"];
+        var accuracy = (double)stats["AttackAccuracy"];
+        
+        var message = $@"ROUND {_game.TurnNumber} STARTING
+
+CURRENT STATUS:
+Red Team: {redUnits} units remaining
+Blue Team: {blueUnits} units remaining
+
+BATTLE STATISTICS:
+Total Attacks: {stats["TotalAttacks"]}
+Hit Accuracy: {accuracy:F1}%
+Units Lost: {stats["UnitsKilled"]} total
+
+Map: {stats["MapName"]}
+
+Good luck, Commander!";
+
+        MessageBox.Show(message, $"Round {_game.TurnNumber}", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        AddToDamageLog($"⚔️ Round {_game.TurnNumber} - Fight!");
+    }
+
     private void OnAttackExecuted(object? sender, AttackResult result)
     {
+        string logEntry;
         if (result.Hit)
         {
-            var message = $"Hit! {result.Damage} damage dealt.";
+            logEntry = $"💥 Hit! {result.Damage} damage";
             if (result.TargetKilled)
-                message += " Target eliminated!";
-            
-            ShowMessage(message, "Attack Result");
+                logEntry += " - ELIMINATED!";
         }
         else
         {
-            ShowMessage("Attack missed!", "Attack Result");
+            logEntry = $"❌ Attack missed!";
+        }
+
+        AddToDamageLog(logEntry);
+        UpdateUI();
+    }
+
+    private void AddToDamageLog(string message)
+    {
+        var timestamp = DateTime.Now.ToString("HH:mm:ss");
+        _damageLog.Add($"[{timestamp}] {message}");
+        
+        // Keep only last 20 entries
+        if (_damageLog.Count > 20)
+        {
+            _damageLog.RemoveAt(0);
         }
         
-        UpdateUI();
+        // Update the display
+        damageLogTextBox.Text = string.Join(Environment.NewLine, _damageLog);
+        
+        // Auto-scroll to bottom
+        damageLogTextBox.SelectionStart = damageLogTextBox.Text.Length;
+        damageLogTextBox.ScrollToCaret();
+    }
+
+    private void ClearDamageLog()
+    {
+        _damageLog.Clear();
+        damageLogTextBox.Text = "";
     }
 
     private void OnGameEnded(object? sender, EventArgs e)
@@ -129,6 +201,8 @@ public partial class MainForm : Form
                     _game.Reset();
                     hexGridControl.ClearSelection();
                     hexGridControl.CenterView();
+                    ClearDamageLog();
+                    AddToDamageLog("🎮 New game started!");
                     UpdateUI();
                     break;
                     
@@ -136,6 +210,8 @@ public partial class MainForm : Form
                     _game.Reset(); // This generates a new random map
                     hexGridControl.ClearSelection();
                     hexGridControl.CenterView();
+                    ClearDamageLog();
+                    AddToDamageLog($"🗺️ New map: {_game.Map.MapName}");
                     UpdateUI();
                     break;
             }
@@ -166,6 +242,9 @@ public partial class MainForm : Form
         {
             _game.Reset();
             hexGridControl.ClearSelection();
+            hexGridControl.CenterView();
+            ClearDamageLog();
+            AddToDamageLog("🎮 New game started!");
             UpdateUI();
         }
     }
@@ -180,6 +259,8 @@ public partial class MainForm : Form
             _game.Reset();
             hexGridControl.ClearSelection();
             hexGridControl.CenterView();
+            ClearDamageLog();
+            AddToDamageLog($"🗺️ New map: {_game.Map.MapName}");
             UpdateUI();
         }
     }
