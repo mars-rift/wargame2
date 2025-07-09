@@ -55,23 +55,32 @@ namespace HexWargame.Core
         private void SetupSquads()
         {
             // Calculate actual map edges dynamically
-            var mapEdge = Map.Height / 2; // For 18x14 map, this is 7
+            var mapEdge = Map.Height / 2; // For 30x20 map, this is 10
             
-            // Red team (top side) - place at the actual top edge
+            // Larger squads for the bigger map - 8 units per team
+            // Red team (top side) - spread across more positions
             var redPositions = new[]
             {
-                new HexCoord(-2, -mapEdge), new HexCoord(-1, -mapEdge), 
-                new HexCoord(0, -mapEdge), new HexCoord(1, -mapEdge)
+                new HexCoord(-4, -mapEdge), new HexCoord(-3, -mapEdge), new HexCoord(-2, -mapEdge), 
+                new HexCoord(-1, -mapEdge), new HexCoord(0, -mapEdge), new HexCoord(1, -mapEdge),
+                new HexCoord(2, -mapEdge), new HexCoord(3, -mapEdge)
             };
-            var redUnits = new[] { UnitType.Infantry, UnitType.Sniper, UnitType.Heavy, UnitType.Medic };
+            var redUnits = new[] { 
+                UnitType.Infantry, UnitType.Infantry, UnitType.Sniper, UnitType.Sniper,
+                UnitType.Heavy, UnitType.Heavy, UnitType.Medic, UnitType.Medic 
+            };
 
-            // Blue team (bottom side) - place at the actual bottom edge
+            // Blue team (bottom side) - spread across more positions
             var bluePositions = new[]
             {
-                new HexCoord(-2, mapEdge), new HexCoord(-1, mapEdge), 
-                new HexCoord(0, mapEdge), new HexCoord(1, mapEdge)
+                new HexCoord(-4, mapEdge), new HexCoord(-3, mapEdge), new HexCoord(-2, mapEdge), 
+                new HexCoord(-1, mapEdge), new HexCoord(0, mapEdge), new HexCoord(1, mapEdge),
+                new HexCoord(2, mapEdge), new HexCoord(3, mapEdge)
             };
-            var blueUnits = new[] { UnitType.Infantry, UnitType.Sniper, UnitType.Heavy, UnitType.Medic };
+            var blueUnits = new[] { 
+                UnitType.Infantry, UnitType.Infantry, UnitType.Sniper, UnitType.Sniper,
+                UnitType.Heavy, UnitType.Heavy, UnitType.Medic, UnitType.Medic 
+            };
 
             // Place red team
             for (int i = 0; i < redPositions.Length && i < redUnits.Length; i++)
@@ -106,31 +115,43 @@ namespace HexWargame.Core
             if (!unit.CanMove) return new List<HexCoord>();
 
             var validMoves = new List<HexCoord>();
-            var visited = new HashSet<HexCoord> { unit.Position };
-            var queue = new Queue<(HexCoord coord, int distance)>();
+            var visited = new Dictionary<HexCoord, int> { { unit.Position, 0 } };
+            var queue = new Queue<(HexCoord coord, int movementUsed)>();
             queue.Enqueue((unit.Position, 0));
 
             while (queue.Count > 0)
             {
-                var (current, distance) = queue.Dequeue();
+                var (current, movementUsed) = queue.Dequeue();
 
-                if (distance < unit.Movement)
+                foreach (var neighbor in current.GetNeighbors())
                 {
-                    foreach (var neighbor in current.GetNeighbors())
+                    if (!Map.IsPassable(neighbor)) continue;
+
+                    // Calculate movement cost including terrain
+                    var terrainCost = Map.Terrain.TryGetValue(neighbor, out var terrain) 
+                        ? Map.GetMovementCost(terrain) 
+                        : 1;
+                    var newMovementUsed = movementUsed + terrainCost;
+
+                    if (newMovementUsed <= unit.Movement)
                     {
-                        if (!visited.Contains(neighbor) && 
-                            Map.IsPassable(neighbor) && 
-                            distance + 1 <= unit.Movement)
+                        // If we haven't visited this hex or found a cheaper path
+                        if (!visited.ContainsKey(neighbor) || visited[neighbor] > newMovementUsed)
                         {
-                            validMoves.Add(neighbor);
-                            visited.Add(neighbor);
-                            queue.Enqueue((neighbor, distance + 1));
+                            visited[neighbor] = newMovementUsed;
+                            
+                            if (neighbor != unit.Position)
+                            {
+                                validMoves.Add(neighbor);
+                            }
+                            
+                            queue.Enqueue((neighbor, newMovementUsed));
                         }
                     }
                 }
             }
 
-            return validMoves;
+            return validMoves.Distinct().ToList();
         }
 
         public List<Unit> GetAttackTargets(Unit unit)
@@ -273,38 +294,63 @@ namespace HexWargame.Core
             
             if (redUnits.Count == 0) return; // Safety check
             
-            var isEndgame = redUnits.Count <= 2 || aiUnits.Count <= 2;
+            var isEndgame = redUnits.Count <= 3 || aiUnits.Count <= 3;
             
             // Coordinate focus fire - prioritize targets multiple units can attack
             var focusTargets = GetFocusFireTargets(aiUnits, redUnits);
             
-            foreach (var unit in aiUnits.ToList()) // ToList to avoid collection modification issues
+            // Organize units by tactical roles for better coordination
+            var tacticalGroups = OrganizeUnitsIntoTacticalGroups(aiUnits);
+            
+            // Execute actions by priority: Snipers -> Heavy -> Infantry -> Medics
+            foreach (var group in tacticalGroups.OrderBy(g => GetGroupPriority(g.Key)))
             {
-                if (!unit.IsAlive) continue;
-
-                // Add delay for better visualization
-                await Task.Delay(500);
-
-                // Phase 1: Try to attack first (with focus fire coordination)
-                await ExecuteAttackPhase(unit, isEndgame, focusTargets);
-
-                // Phase 2: Strategic movement (recalculate enemies in case one was eliminated)
-                var currentEnemies = GetTeamUnits(Team.Red);
-                if (currentEnemies.Count > 0)
+                foreach (var unit in group.Value.ToList())
                 {
-                    await ExecuteMovementPhase(unit, currentEnemies, isEndgame);
-                }
-                
-                // Phase 3: Attack again if moved into range
-                if (unit.CanAttack)
-                {
+                    if (!unit.IsAlive) continue;
+
+                    // Add delay for better visualization
+                    await Task.Delay(400);
+
+                    // Phase 1: Try to attack first (with focus fire coordination)
                     await ExecuteAttackPhase(unit, isEndgame, focusTargets);
+
+                    // Phase 2: Strategic movement (recalculate enemies in case one was eliminated)
+                    var currentEnemies = GetTeamUnits(Team.Red);
+                    if (currentEnemies.Count > 0)
+                    {
+                        await ExecuteMovementPhase(unit, currentEnemies, isEndgame);
+                    }
+                    
+                    // Phase 3: Attack again if moved into range
+                    if (unit.CanAttack)
+                    {
+                        await ExecuteAttackPhase(unit, isEndgame, focusTargets);
+                    }
                 }
             }
 
             // End AI turn
-            await Task.Delay(500);
+            await Task.Delay(300);
             NextTurn();
+        }
+
+        private Dictionary<UnitType, List<Unit>> OrganizeUnitsIntoTacticalGroups(List<Unit> units)
+        {
+            return units.GroupBy(u => u.UnitType)
+                       .ToDictionary(g => g.Key, g => g.ToList());
+        }
+
+        private int GetGroupPriority(UnitType unitType)
+        {
+            return unitType switch
+            {
+                UnitType.Sniper => 1,    // Attack first from range
+                UnitType.Heavy => 2,     // Tank damage and attack
+                UnitType.Infantry => 3,  // Versatile support
+                UnitType.Medic => 4,     // Support and heal
+                _ => 5
+            };
         }
 
         private Dictionary<Unit, int> GetFocusFireTargets(List<Unit> aiUnits, List<Unit> enemies)
@@ -467,6 +513,10 @@ namespace HexWargame.Core
             // Unit type specific positioning
             score += GetUnitTypePositionBonus(unit, position, enemies);
 
+            // Formation and coordination bonus for larger maps
+            var friendlyUnits = GetTeamUnits(unit.Team);
+            score += GetFormationBonus(unit, position, friendlyUnits);
+
             // Penalty for being in enemy attack range
             var enemiesInRange = enemies.Count(e => 
                 position.DistanceTo(e.Position) <= e.AttackRange && e.CanAttack);
@@ -529,6 +579,48 @@ namespace HexWargame.Core
         {
             // Infantry are flexible, slight preference for cover
             return Map.GetDefenseBonus(position) * 0.5;
+        }
+
+        private double GetFormationBonus(Unit unit, HexCoord position, List<Unit> friendlyUnits)
+        {
+            var bonus = 0.0;
+            var nearbyFriendlies = friendlyUnits
+                .Where(f => f != unit && f.IsAlive && position.DistanceTo(f.Position) <= 3)
+                .ToList();
+
+            // Bonus for staying near friendlies (mutual support)
+            bonus += nearbyFriendlies.Count * 5;
+
+            // Special formations based on unit types
+            switch (unit.UnitType)
+            {
+                case UnitType.Medic:
+                    // Medics get bonus for being central to formation
+                    var centralBonus = nearbyFriendlies.Count >= 2 ? 15 : 0;
+                    bonus += centralBonus;
+                    break;
+
+                case UnitType.Heavy:
+                    // Heavy units get bonus for being on the front line
+                    var frontLineBonus = nearbyFriendlies.Any(f => f.UnitType == UnitType.Infantry) ? 10 : 0;
+                    bonus += frontLineBonus;
+                    break;
+
+                case UnitType.Sniper:
+                    // Snipers prefer positions with support but not crowded
+                    if (nearbyFriendlies.Count == 1 || nearbyFriendlies.Count == 2)
+                        bonus += 10;
+                    else if (nearbyFriendlies.Count > 3)
+                        bonus -= 5; // Too crowded for snipers
+                    break;
+
+                case UnitType.Infantry:
+                    // Infantry are flexible and support others
+                    bonus += nearbyFriendlies.Count * 3;
+                    break;
+            }
+
+            return bonus;
         }
 
         /// <summary>

@@ -17,13 +17,32 @@ public partial class MainForm : Form
         
         // Call CenterView after form is loaded and sized
         this.Load += MainForm_Load;
+        this.Resize += MainForm_Resize;
     }
 
-    private void MainForm_Load(object? sender, EventArgs e)
+    private async void MainForm_Load(object? sender, EventArgs e)
     {
+        // Force layout update and give time for maximizing
+        this.PerformLayout();
+        await Task.Delay(200);
+        
         // Ensure the control is properly sized, then center the view
         hexGridControl.CenterView();
         UpdateUI(); // Make sure UI is updated after centering
+        
+        // Force another center view after a short delay to ensure full sizing
+        await Task.Delay(100);
+        hexGridControl.CenterView();
+    }
+
+    private async void MainForm_Resize(object? sender, EventArgs e)
+    {
+        // Give the controls time to resize, then recenter the view
+        await Task.Delay(50);
+        if (_game?.Map != null)
+        {
+            hexGridControl.CenterView();
+        }
     }
 
     private void InitializeGame()

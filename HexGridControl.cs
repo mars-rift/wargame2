@@ -87,7 +87,7 @@ namespace HexWargame.UI
             // 
             // HexGridControl
             // 
-            BackColor = Color.White;
+            BackColor = Color.FromArgb(34, 139, 34); // Forest green to blend with terrain
             Name = "HexGridControl";
             Size = new Size(600, 500);
             MouseClick += HexGridControl_MouseClick;
@@ -186,9 +186,10 @@ namespace HexWargame.UI
                     g.DrawEllipse(pen, unitRect);
                 }
 
-                // Draw unit type character
+                // Draw unit type character - scale font with hex size
                 var unitChar = unit.GetUnitChar().ToString();
-                using (var font = new Font("Arial", 14, FontStyle.Bold))
+                var fontSize = Math.Max(8, Math.Min(24, _hexSize * 0.4f)); // Scale font with hex size
+                using (var font = new Font("Arial", fontSize, FontStyle.Bold))
                 using (var brush = new SolidBrush(Color.White))
                 {
                     var textSize = g.MeasureString(unitChar, font);
@@ -206,7 +207,7 @@ namespace HexWargame.UI
         private void DrawHealthBar(Graphics g, Unit unit, PointF center)
         {
             var barWidth = _hexSize * 1.2f;
-            var barHeight = 4f;
+            var barHeight = Math.Max(2f, _hexSize * 0.1f); // Scale health bar height
             var barY = center.Y + _hexSize * 0.8f;
             
             var healthPercent = (float)unit.CurrentHp / unit.MaxHp;
@@ -256,7 +257,9 @@ namespace HexWargame.UI
             
             for (int i = 0; i < 6; i++)
             {
-                var angle = Math.PI / 3 * i;
+                // For flat-top hexes, start at angle π/6 (30 degrees)
+                // This creates hexagons with flat tops and bottoms
+                var angle = Math.PI / 6 + Math.PI / 3 * i;
                 points[i] = new PointF(
                     center.X + (float)(_hexSize * Math.Cos(angle)),
                     center.Y + (float)(_hexSize * Math.Sin(angle)));
@@ -270,8 +273,12 @@ namespace HexWargame.UI
         {
             if (_game?.Map == null) return null;
 
-            var adjustedPos = new PointF(mousePos.X - _offset.X, mousePos.Y - _offset.Y);
-            var coord = HexCoord.FromPixel(adjustedPos, _hexSize);
+            // Convert screen coordinates back to map coordinates
+            var adjustedX = (mousePos.X - _offset.X) / _scale;
+            var adjustedY = (mousePos.Y - _offset.Y) / _scale;
+            var adjustedPos = new PointF(adjustedX, adjustedY);
+            
+            var coord = HexCoord.FromPixel(adjustedPos, BaseHexSize);
             
             return _game.Map.IsValidPosition(coord) ? coord : null;
         }
@@ -382,31 +389,33 @@ namespace HexWargame.UI
             var minR = coords.Min(c => c.R);
             var maxR = coords.Max(c => c.R);
 
-            // Calculate map dimensions in pixels at base scale
-            var topLeft = new HexCoord(minQ, minR).ToPixel(BaseHexSize);
-            var bottomRight = new HexCoord(maxQ, maxR).ToPixel(BaseHexSize);
+            // Calculate map bounds in pixel space at base scale
+            var allCoords = _game.Map.Terrain.Keys.ToList();
+            if (!allCoords.Any()) return;
+
+            // Calculate how many hexes we have horizontally and vertically
+            var hexCountX = maxQ - minQ + 1;
+            var hexCountY = maxR - minR + 1;
+
+            // Calculate hex size to fit flat-top hexes properly
+            // For flat-top hexes: width = sqrt(3) * radius, height = 2 * radius
+            // Horizontal spacing = sqrt(3) * radius, vertical spacing = 1.5 * radius
+            var hexRadiusFromWidth = Width / (hexCountX * (float)Math.Sqrt(3) + (float)Math.Sqrt(3) / 2);
+            var hexRadiusFromHeight = Height / (hexCountY * 1.5f + 0.5f);
             
-            var mapWidth = Math.Abs(bottomRight.X - topLeft.X) + BaseHexSize * 2;
-            var mapHeight = Math.Abs(bottomRight.Y - topLeft.Y) + BaseHexSize * 2;
+            // Use the smaller radius but clamp it to reasonable sizes
+            _hexSize = Math.Min(hexRadiusFromWidth, hexRadiusFromHeight);
+            _hexSize = Math.Max(25f, Math.Min(40f, _hexSize)); // Keep hexes reasonably sized
+            _scale = _hexSize / BaseHexSize;
 
-            // Calculate scale to fit the map in the available space (with minimal padding)
-            var availableWidth = Width - 40; // Reasonable padding
-            var availableHeight = Height - 40; // Reasonable padding
-
-            var scaleX = availableWidth / mapWidth;
-            var scaleY = availableHeight / mapHeight;
-            _scale = Math.Min(scaleX, scaleY);
+            // Calculate the actual map bounds in the new scaled coordinates
+            var minPixel = new HexCoord(minQ, minR).ToPixel(BaseHexSize);
+            var maxPixel = new HexCoord(maxQ, maxR).ToPixel(BaseHexSize);
             
-            // Reasonable scaling limits - not too small, not too large
-            _scale = Math.Max(0.5f, Math.Min(2.5f, _scale)); // Keep scale between 0.5x and 2.5x
-            
-            _hexSize = BaseHexSize * _scale;
+            var mapCenterX = (minPixel.X + maxPixel.X) / 2;
+            var mapCenterY = (minPixel.Y + maxPixel.Y) / 2;
 
-            // Calculate map center in pixel coordinates at base scale
-            var mapCenterX = (topLeft.X + bottomRight.X) / 2;
-            var mapCenterY = (topLeft.Y + bottomRight.Y) / 2;
-
-            // Set offset to center the scaled map in the control
+            // Position to center the map in the available space
             _offset = new PointF(
                 Width / 2f - mapCenterX * _scale,
                 Height / 2f - mapCenterY * _scale);

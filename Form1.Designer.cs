@@ -209,6 +209,7 @@ partial class MainForm
         Controls.Add(damageLogPanel);
         Name = "MainForm";
         StartPosition = FormStartPosition.CenterScreen;
+        WindowState = FormWindowState.Maximized;
         Text = "Hex Wargame - Two Squads Battle";
         ResumeLayout(false);
     }
