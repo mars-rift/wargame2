@@ -43,6 +43,7 @@ partial class MainForm
         newMapButton = new Button();
         endTurnButton = new Button();
         helpButton = new Button();
+        abilityButton = new Button();
         SuspendLayout();
         // 
         // hexGridControl
@@ -152,6 +153,7 @@ partial class MainForm
         // 
         // buttonPanel
         // 
+        buttonPanel.Controls.Add(abilityButton);
         buttonPanel.Controls.Add(helpButton);
         buttonPanel.Controls.Add(endTurnButton);
         buttonPanel.Controls.Add(newMapButton);
@@ -159,7 +161,7 @@ partial class MainForm
         buttonPanel.Dock = DockStyle.None;
         buttonPanel.Location = new Point(10, 250);
         buttonPanel.Name = "buttonPanel";
-        buttonPanel.Size = new Size(180, 100);
+        buttonPanel.Size = new Size(180, 130);
         buttonPanel.TabIndex = 6;
         buttonPanel.BackColor = Color.LightGray;
         // 
@@ -199,6 +201,16 @@ partial class MainForm
         helpButton.Text = "Help";
         helpButton.UseVisualStyleBackColor = true;
         // 
+        // abilityButton
+        // 
+        abilityButton.Location = new Point(10, 90);
+        abilityButton.Name = "abilityButton";
+        abilityButton.Size = new Size(170, 30);
+        abilityButton.TabIndex = 4;
+        abilityButton.Text = "Use Ability (A)";
+        abilityButton.UseVisualStyleBackColor = true;
+        abilityButton.Enabled = false;
+        // 
         // MainForm
         // 
         AutoScaleDimensions = new SizeF(7F, 15F);
@@ -231,4 +243,5 @@ partial class MainForm
     private Button newMapButton;
     private Button endTurnButton;
     private Button helpButton;
+    private Button abilityButton;
 }

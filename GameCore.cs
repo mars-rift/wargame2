@@ -58,7 +58,7 @@ namespace HexWargame.Core
             return HexRound(q, r);
         }
 
-        private static HexCoord HexRound(double q, double r)
+        public static HexCoord HexRound(double q, double r)
         {
             var s = -q - r;
             var rq = Math.Round(q);
@@ -127,6 +127,12 @@ namespace HexWargame.Core
         public int AttackPower { get; }
         public bool HasMoved { get; set; }
         public bool HasAttacked { get; set; }
+        public UnitAbility Ability { get; }
+        
+        // Status effects
+        public bool IsOnOverwatch { get; set; }
+        public bool IsSuppressed { get; set; }
+        public int SuppressionTurns { get; set; }
 
         public Unit(UnitType unitType, Team team, HexCoord position)
         {
@@ -138,6 +144,7 @@ namespace HexWargame.Core
             Movement = GetMovement(unitType);
             AttackRange = GetAttackRange(unitType);
             AttackPower = GetAttackPower(unitType);
+            Ability = GetUnitAbility(unitType);
         }
 
         private static int GetMaxHp(UnitType unitType) => unitType switch
@@ -176,6 +183,19 @@ namespace HexWargame.Core
             _ => 30
         };
 
+        private static UnitAbility GetUnitAbility(UnitType unitType) => unitType switch
+        {
+            UnitType.Medic => new UnitAbility(AbilityType.MedicHeal, "Field Medic", 
+                "Heal a friendly unit for 30 HP", 2, 2),
+            UnitType.Sniper => new UnitAbility(AbilityType.SniperOverwatch, "Overwatch", 
+                "Enter overwatch mode - attack enemies that move in range", 0, 3),
+            UnitType.Heavy => new UnitAbility(AbilityType.HeavySuppression, "Suppression Fire", 
+                "Suppress enemies in a 2-hex radius, reducing their movement", 3, 3),
+            UnitType.Infantry => new UnitAbility(AbilityType.InfantryRush, "Sprint", 
+                "Move an extra 2 hexes this turn", 0, 4),
+            _ => new UnitAbility(AbilityType.None, "None", "No special ability", 0, 0)
+        };
+
         public bool IsAlive => CurrentHp > 0;
         public bool CanMove => !HasMoved && IsAlive;
         public bool CanAttack => !HasAttacked && IsAlive;
@@ -194,6 +214,51 @@ namespace HexWargame.Core
         {
             HasMoved = false;
             HasAttacked = false;
+            Ability.ReduceCooldown();
+            
+            // Update status effects
+            if (SuppressionTurns > 0)
+            {
+                SuppressionTurns--;
+                if (SuppressionTurns <= 0)
+                    IsSuppressed = false;
+            }
+        }
+
+        /// <summary>
+        /// Apply suppression effect to this unit
+        /// </summary>
+        public void ApplySuppression(int turns = 2)
+        {
+            IsSuppressed = true;
+            SuppressionTurns = Math.Max(SuppressionTurns, turns);
+        }
+
+        /// <summary>
+        /// Check if unit can use its ability
+        /// </summary>
+        public bool CanUseAbility()
+        {
+            return IsAlive && Ability.IsAvailable && !IsSuppressed;
+        }
+
+        /// <summary>
+        /// Get effective movement considering status effects
+        /// </summary>
+        public int GetEffectiveMovement()
+        {
+            int baseMovement = Movement;
+            
+            // Suppression reduces movement
+            if (IsSuppressed)
+                baseMovement = Math.Max(1, baseMovement - 1);
+                
+            // Infantry sprint ability
+            if (UnitType == UnitType.Infantry && Ability.Type == AbilityType.InfantryRush 
+                && Ability.CurrentCooldown == Ability.Cooldown) // Just used
+                baseMovement += 2;
+                
+            return baseMovement;
         }
 
         /// <summary>
@@ -723,5 +788,253 @@ namespace HexWargame.Core
             TerrainType.Water => 999,     // Impassable
             _ => 1
         };
+
+        /// <summary>
+        /// Check if there's a clear line of sight between two positions
+        /// </summary>
+        public bool HasLineOfSight(HexCoord from, HexCoord to)
+        {
+            if (from == to) return true;
+            
+            var distance = from.DistanceTo(to);
+            if (distance <= 1) return true; // Adjacent hexes always have LOS
+            
+            // Use hex line algorithm to check intermediate hexes
+            var line = GetHexLine(from, to);
+            
+            foreach (var hex in line.Skip(1).Take(line.Count - 2)) // Skip start and end
+            {
+                if (!Terrain.TryGetValue(hex, out var terrain)) continue;
+                
+                // Blocking terrain types
+                if (terrain == TerrainType.Building || terrain == TerrainType.Forest)
+                    return false;
+                    
+                // Units block line of sight
+                if (Units.ContainsKey(hex))
+                    return false;
+            }
+            
+            return true;
+        }
+
+        /// <summary>
+        /// Get hex line between two coordinates using linear interpolation
+        /// </summary>
+        private List<HexCoord> GetHexLine(HexCoord from, HexCoord to)
+        {
+            var distance = from.DistanceTo(to);
+            var results = new List<HexCoord>();
+            
+            if (distance == 0)
+            {
+                results.Add(from);
+                return results;
+            }
+            
+            for (int i = 0; i <= distance; i++)
+            {
+                var t = i / (float)distance;
+                var lerpQ = from.Q + (to.Q - from.Q) * t;
+                var lerpR = from.R + (to.R - from.R) * t;
+                
+                results.Add(HexCoord.HexRound(lerpQ, lerpR));
+            }
+            
+            return results;
+        }
+
+        /// <summary>
+        /// Find optimal path using A* algorithm considering terrain costs
+        /// </summary>
+        public List<HexCoord> FindOptimalPath(HexCoord start, HexCoord goal, int maxMovement)
+        {
+            var openSet = new SortedSet<PathNode>(new PathNodeComparer());
+            var closedSet = new HashSet<HexCoord>();
+            var cameFrom = new Dictionary<HexCoord, HexCoord>();
+            var gScore = new Dictionary<HexCoord, int> { [start] = 0 };
+            var fScore = new Dictionary<HexCoord, int> { [start] = start.DistanceTo(goal) };
+            
+            openSet.Add(new PathNode(start, fScore[start]));
+            
+            while (openSet.Count > 0)
+            {
+                var currentNode = openSet.Min!;
+                var current = currentNode.Coord;
+                openSet.Remove(currentNode);
+                
+                if (current == goal)
+                {
+                    return ReconstructPath(cameFrom, current);
+                }
+                
+                closedSet.Add(current);
+                
+                foreach (var neighbor in current.GetNeighbors())
+                {
+                    if (!IsPassable(neighbor) || closedSet.Contains(neighbor))
+                        continue;
+                    
+                    var terrainCost = Terrain.TryGetValue(neighbor, out var terrain) 
+                        ? GetMovementCost(terrain) 
+                        : 1;
+                    var tentativeGScore = gScore[current] + terrainCost;
+                    
+                    // Don't exceed movement range
+                    if (tentativeGScore > maxMovement)
+                        continue;
+                    
+                    if (!gScore.ContainsKey(neighbor) || tentativeGScore < gScore[neighbor])
+                    {
+                        cameFrom[neighbor] = current;
+                        gScore[neighbor] = tentativeGScore;
+                        fScore[neighbor] = tentativeGScore + neighbor.DistanceTo(goal);
+                        
+                        var neighborNode = new PathNode(neighbor, fScore[neighbor]);
+                        if (!openSet.Contains(neighborNode))
+                        {
+                            openSet.Add(neighborNode);
+                        }
+                    }
+                }
+            }
+            
+            return new List<HexCoord>(); // No path found
+        }
+
+        private List<HexCoord> ReconstructPath(Dictionary<HexCoord, HexCoord> cameFrom, HexCoord current)
+        {
+            var path = new List<HexCoord> { current };
+            
+            while (cameFrom.ContainsKey(current))
+            {
+                current = cameFrom[current];
+                path.Insert(0, current);
+            }
+            
+            return path;
+        }
+
+        /// <summary>
+        /// Check if a unit can flank another unit (attack from sides/rear)
+        /// </summary>
+        public bool CanFlank(HexCoord attackerPos, HexCoord targetPos, HexCoord targetFacing)
+        {
+            // Simplified flanking: attacking from sides or rear relative to target's last movement
+            var attackVector = new HexCoord(targetPos.Q - attackerPos.Q, targetPos.R - attackerPos.R);
+            var facingVector = new HexCoord(targetFacing.Q - targetPos.Q, targetFacing.R - targetPos.R);
+            
+            // If vectors are opposite or perpendicular, it's a flank
+            var dotProduct = attackVector.Q * facingVector.Q + attackVector.R * facingVector.R;
+            return dotProduct <= 0; // Side or rear attack
+        }
+    }
+
+    /// <summary>
+    /// Represents the current phase of the game
+    /// </summary>
+    public enum GameState
+    {
+        PlayerTurn,     // Player is actively taking actions
+        AITurn,         // AI is processing its turn
+        Animating,      // Animations or effects are playing
+        GameOver,       // Game has ended
+        UnitSelection,  // Player is selecting a unit
+        MovementPhase,  // Unit movement is being executed
+        AttackPhase,    // Attack is being executed
+        AbilityPhase    // Special ability is being used
+    }
+
+    /// <summary>
+    /// Represents different unit abilities
+    /// </summary>
+    public enum AbilityType
+    {
+        None,
+        MedicHeal,      // Medic healing ability
+        SniperOverwatch, // Sniper overwatch mode
+        HeavySuppression, // Heavy suppression fire
+        InfantryRush    // Infantry sprint ability
+    }
+
+    /// <summary>
+    /// Represents a unit's special ability
+    /// </summary>
+    public class UnitAbility
+    {
+        public AbilityType Type { get; }
+        public string Name { get; }
+        public string Description { get; }
+        public int Range { get; }
+        public int Cooldown { get; }
+        public int CurrentCooldown { get; set; }
+        public bool IsAvailable => CurrentCooldown <= 0;
+
+        public UnitAbility(AbilityType type, string name, string description, int range, int cooldown)
+        {
+            Type = type;
+            Name = name;
+            Description = description;
+            Range = range;
+            Cooldown = cooldown;
+            CurrentCooldown = 0;
+        }
+
+        public void Use()
+        {
+            CurrentCooldown = Cooldown;
+        }
+
+        public void ReduceCooldown()
+        {
+            if (CurrentCooldown > 0)
+                CurrentCooldown--;
+        }
+    }
+
+    /// <summary>
+    /// Node for A* pathfinding algorithm
+    /// </summary>
+    public class PathNode
+    {
+        public HexCoord Coord { get; }
+        public int FScore { get; }
+
+        public PathNode(HexCoord coord, int fScore)
+        {
+            Coord = coord;
+            FScore = fScore;
+        }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is PathNode other && Coord.Equals(other.Coord);
+        }
+
+        public override int GetHashCode()
+        {
+            return Coord.GetHashCode();
+        }
+    }
+
+    /// <summary>
+    /// Comparer for PathNode to use in SortedSet for A*
+    /// </summary>
+    public class PathNodeComparer : IComparer<PathNode>
+    {
+        public int Compare(PathNode? x, PathNode? y)
+        {
+            if (x == null || y == null) return 0;
+            
+            var result = x.FScore.CompareTo(y.FScore);
+            if (result == 0)
+            {
+                // If F-scores are equal, compare coordinates to maintain uniqueness
+                result = x.Coord.Q.CompareTo(y.Coord.Q);
+                if (result == 0)
+                    result = x.Coord.R.CompareTo(y.Coord.R);
+            }
+            return result;
+        }
     }
 }

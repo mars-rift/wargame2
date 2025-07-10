@@ -14,6 +14,11 @@ namespace HexWargame.Core
         public int Damage { get; set; }
         public bool TargetKilled { get; set; }
         public string Message { get; set; } = string.Empty;
+
+        // Add properties for attacker and target units
+        public Unit Attacker { get; set; } = null!;
+        public Unit Target { get; set; } = null!;
+        public bool IsOverwatchAttack { get; set; } // Indicates if this was an overwatch attack
     }
 
     /// <summary>
@@ -23,6 +28,7 @@ namespace HexWargame.Core
     {
         public GameMap Map { get; }
         public Team CurrentTeam { get; private set; }
+        public GameState State { get; private set; }
         public int TurnNumber { get; private set; }
         public bool GameOver { get; private set; }
         public Team? Winner { get; private set; }
@@ -40,16 +46,31 @@ namespace HexWargame.Core
         public event EventHandler<Team>? TeamChanged;
         public event EventHandler<AttackResult>? AttackExecuted;
         public event EventHandler<Unit>? UnitMoved;
+        public event EventHandler<GameState>? StateChanged;
         public event EventHandler? GameEnded;
+        public event EventHandler<AbilityResult>? AbilityExecuted;
 
         public Game()
         {
             Map = new GameMap();
             CurrentTeam = Team.Red;
+            State = GameState.PlayerTurn;
             TurnNumber = 1;
             _random = new Random();
             GameStartTime = DateTime.Now;
             SetupSquads();
+        }
+
+        /// <summary>
+        /// Change the game state and notify listeners
+        /// </summary>
+        private void ChangeState(GameState newState)
+        {
+            if (State != newState)
+            {
+                State = newState;
+                StateChanged?.Invoke(this, newState);
+            }
         }
 
         private void SetupSquads()
@@ -114,6 +135,7 @@ namespace HexWargame.Core
         {
             if (!unit.CanMove) return new List<HexCoord>();
 
+            var maxMovement = unit.GetEffectiveMovement();
             var validMoves = new List<HexCoord>();
             var visited = new Dictionary<HexCoord, int> { { unit.Position, 0 } };
             var queue = new Queue<(HexCoord coord, int movementUsed)>();
@@ -133,7 +155,7 @@ namespace HexWargame.Core
                         : 1;
                     var newMovementUsed = movementUsed + terrainCost;
 
-                    if (newMovementUsed <= unit.Movement)
+                    if (newMovementUsed <= maxMovement)
                     {
                         // If we haven't visited this hex or found a cheaper path
                         if (!visited.ContainsKey(neighbor) || visited[neighbor] > newMovementUsed)
@@ -154,6 +176,17 @@ namespace HexWargame.Core
             return validMoves.Distinct().ToList();
         }
 
+        /// <summary>
+        /// Get optimal movement path using A* algorithm
+        /// </summary>
+        public List<HexCoord> GetOptimalMovementPath(Unit unit, HexCoord destination)
+        {
+            if (!unit.CanMove) return new List<HexCoord>();
+            
+            var maxMovement = unit.GetEffectiveMovement();
+            return Map.FindOptimalPath(unit.Position, destination, maxMovement);
+        }
+
         public List<Unit> GetAttackTargets(Unit unit)
         {
             if (!unit.CanAttack) return new List<Unit>();
@@ -161,19 +194,65 @@ namespace HexWargame.Core
             return Map.Units.Values
                 .Where(target => target.Team != unit.Team && 
                                target.IsAlive && 
-                               unit.Position.DistanceTo(target.Position) <= unit.AttackRange)
+                               unit.Position.DistanceTo(target.Position) <= unit.AttackRange &&
+                               Map.HasLineOfSight(unit.Position, target.Position))
                 .ToList();
         }
 
-        public bool MoveUnit(Unit unit, HexCoord targetPos)
+        public bool MoveUnit(Unit unit, HexCoord targetCoord)
         {
-            var validMoves = GetValidMoves(unit);
-            if (!validMoves.Contains(targetPos)) return false;
+            var originalPosition = unit.Position;
+            
+            if (Map.PlaceUnit(unit, targetCoord))
+            {
+                // Check for overwatch attacks from enemy units
+                CheckOverwatchAttacks(unit, originalPosition, targetCoord);
+                
+                unit.HasMoved = true;
+                UnitMoved?.Invoke(this, unit);
+                return true;
+            }
+            
+            return false;
+        }
 
-            Map.PlaceUnit(unit, targetPos);
-            unit.HasMoved = true;
-            UnitMoved?.Invoke(this, unit);
-            return true;
+        private void CheckOverwatchAttacks(Unit movingUnit, HexCoord fromCoord, HexCoord toCoord)
+        {
+            // Find enemy units on overwatch that have line of sight to the movement path
+            var overwatchUnits = Map.Units.Values
+                .Where(u => u.Team != movingUnit.Team 
+                    && u.IsAlive 
+                    && u.IsOnOverwatch
+                    && u.UnitType == UnitType.Sniper)
+                .ToList();
+                
+            foreach (var sniper in overwatchUnits)
+            {
+                // Check if movement path is visible to sniper
+                if (Map.HasLineOfSight(sniper.Position, toCoord) &&
+                    toCoord.DistanceTo(sniper.Position) <= sniper.AttackRange)
+                {
+                    // Execute overwatch attack using simplified damage calculation
+                    var baseDamage = sniper.AttackPower;
+                    var damageVariance = _random.Next(-10, 11);
+                    var damage = Math.Max(10, baseDamage + damageVariance);
+                    movingUnit.TakeDamage(damage);
+                    
+                    // Notify attack occurred
+                    AttackExecuted?.Invoke(this, new AttackResult
+                    {
+                        Attacker = sniper,
+                        Target = movingUnit,
+                        Damage = damage,
+                        Success = true,
+                        Hit = true,
+                        IsOverwatchAttack = true
+                    });
+                    
+                    // Overwatch is used up after firing
+                    sniper.IsOnOverwatch = false;
+                }
+            }
         }
 
         public AttackResult AttackUnit(Unit attacker, Unit target)
@@ -243,10 +322,13 @@ namespace HexWargame.Core
             return result;
         }
 
+        /// <summary>
+        /// Advance to the next turn
+        /// </summary>
         public void NextTurn()
         {
-            // Reset all units of current team
-            foreach (var unit in GetTeamUnits(CurrentTeam))
+            // Reset unit abilities for new turn
+            foreach (var unit in Map.Units.Values)
             {
                 unit.ResetTurn();
             }
@@ -254,13 +336,161 @@ namespace HexWargame.Core
             // Switch teams
             CurrentTeam = CurrentTeam == Team.Red ? Team.Blue : Team.Red;
             
+            // Increment turn counter when it's red team's turn again
             if (CurrentTeam == Team.Red)
+            {
                 TurnNumber++;
+            }
 
             TeamChanged?.Invoke(this, CurrentTeam);
 
-            // Check for game over
+            // Check for game end conditions
             CheckGameOver();
+        }
+
+        /// <summary>
+        /// Execute a unit's special ability on a target
+        /// </summary>
+        public bool ExecuteAbility(Unit unit, HexCoord targetCoord)
+        {
+            if (!unit.CanUseAbility())
+                return false;
+                
+            var ability = unit.Ability;
+            bool success = false;
+            
+            // Check if target is in range
+            if (unit.Position.DistanceTo(targetCoord) > ability.Range && ability.Range > 0)
+                return false;
+                
+            switch (ability.Type)
+            {
+                case AbilityType.MedicHeal:
+                    success = ExecuteMedicHeal(unit, targetCoord);
+                    break;
+                    
+                case AbilityType.SniperOverwatch:
+                    success = ExecuteSniperOverwatch(unit);
+                    break;
+                    
+                case AbilityType.HeavySuppression:
+                    success = ExecuteHeavySuppression(unit);
+                    break;
+                    
+                case AbilityType.InfantryRush:
+                    success = ExecuteInfantryRush(unit);
+                    break;
+            }
+            
+            if (success)
+            {
+                ability.Use();
+                
+                // Fire ability used event
+                AbilityExecuted?.Invoke(this, new AbilityResult
+                {
+                    User = unit,
+                    AbilityType = ability.Type,
+                    TargetCoord = targetCoord
+                });
+            }
+            
+            return success;
+        }
+
+        private bool ExecuteMedicHeal(Unit medic, HexCoord targetCoord)
+        {
+            var targetUnit = Map.GetUnitAt(targetCoord);
+            
+            // Check if target is valid (friendly unit that needs healing)
+            if (targetUnit == null || targetUnit.Team != medic.Team || targetUnit.CurrentHp == targetUnit.MaxHp)
+                return false;
+                
+            // Heal the unit for 30 HP
+            targetUnit.Heal(30);
+            return true;
+        }
+
+        private bool ExecuteSniperOverwatch(Unit sniper)
+        {
+            // Activate overwatch mode - will be checked during movement phase
+            sniper.IsOnOverwatch = true;
+            return true;
+        }
+
+        private bool ExecuteHeavySuppression(Unit heavy)
+        {
+            // Get all enemies in 2-hex radius
+            var enemiesInRange = Map.Units.Values
+                .Where(u => u.Team != heavy.Team && u.IsAlive && u.Position.DistanceTo(heavy.Position) <= 2)
+                .ToList();
+                
+            if (!enemiesInRange.Any())
+                return false;
+                
+            // Apply suppression to all enemies in range
+            foreach (var enemy in enemiesInRange)
+            {
+                enemy.ApplySuppression(2);
+            }
+            
+            return true;
+        }
+
+        private bool ExecuteInfantryRush(Unit infantry)
+        {
+            // Ability is passive - it's applied in GetEffectiveMovement()
+            // Just mark as used and the extra movement will be available
+            return true;
+        }
+
+        /// <summary>
+        /// Get all valid targets for a unit's ability
+        /// </summary>
+        public List<HexCoord> GetValidAbilityTargets(Unit unit)
+        {
+            if (!unit.CanUseAbility())
+                return new List<HexCoord>();
+                
+            var targets = new List<HexCoord>();
+            var ability = unit.Ability;
+            
+            switch (ability.Type)
+            {
+                case AbilityType.MedicHeal:
+                    // Valid targets are friendly units in range that aren't at full health
+                    targets = Map.Units.Values
+                        .Where(u => u.Team == unit.Team 
+                            && u.IsAlive 
+                            && u.Position.DistanceTo(unit.Position) <= ability.Range
+                            && u.CurrentHp < u.MaxHp)
+                        .Select(u => u.Position)
+                        .ToList();
+                    break;
+                    
+                case AbilityType.SniperOverwatch:
+                    // Overwatch is self-targeted
+                    targets.Add(unit.Position);
+                    break;
+                    
+                case AbilityType.HeavySuppression:
+                    // If there are enemies in range, target self (area effect)
+                    var enemiesInRange = Map.Units.Values
+                        .Any(u => u.Team != unit.Team 
+                            && u.IsAlive 
+                            && u.Position.DistanceTo(unit.Position) <= 2);
+                            
+                    if (enemiesInRange)
+                        targets.Add(unit.Position);
+                    break;
+                    
+                case AbilityType.InfantryRush:
+                    // Self-targeted movement boost
+                    targets.Add(unit.Position);
+                    break;
+            }
+            
+            return targets;
         }
 
         private void CheckGameOver()
@@ -289,6 +519,7 @@ namespace HexWargame.Core
         {
             if (CurrentTeam != Team.Blue || GameOver) return;
 
+            ChangeState(GameState.AITurn);
             var aiUnits = GetTeamUnits(Team.Blue);
             var redUnits = GetTeamUnits(Team.Red);
             
@@ -312,17 +543,20 @@ namespace HexWargame.Core
                     // Add delay for better visualization
                     await Task.Delay(400);
 
-                    // Phase 1: Try to attack first (with focus fire coordination)
+                    // Phase 1: Consider using abilities first
+                    await ExecuteAbilityPhase(unit, isEndgame);
+
+                    // Phase 2: Try to attack (with focus fire coordination)
                     await ExecuteAttackPhase(unit, isEndgame, focusTargets);
 
-                    // Phase 2: Strategic movement (recalculate enemies in case one was eliminated)
+                    // Phase 3: Strategic movement (recalculate enemies in case one was eliminated)
                     var currentEnemies = GetTeamUnits(Team.Red);
                     if (currentEnemies.Count > 0)
                     {
                         await ExecuteMovementPhase(unit, currentEnemies, isEndgame);
                     }
                     
-                    // Phase 3: Attack again if moved into range
+                    // Phase 4: Attack again if moved into range
                     if (unit.CanAttack)
                     {
                         await ExecuteAttackPhase(unit, isEndgame, focusTargets);
@@ -332,6 +566,7 @@ namespace HexWargame.Core
 
             // End AI turn
             await Task.Delay(300);
+            ChangeState(GameState.PlayerTurn);
             NextTurn();
         }
 
@@ -503,12 +738,27 @@ namespace HexWargame.Core
         {
             double score = 0;
 
-            // Attack opportunity score
-            var attackableEnemies = enemies.Count(e => position.DistanceTo(e.Position) <= unit.AttackRange);
+            // Line-of-sight and attack opportunity score
+            var attackableEnemies = enemies.Count(e => 
+                position.DistanceTo(e.Position) <= unit.AttackRange &&
+                Map.HasLineOfSight(position, e.Position));
             score += attackableEnemies * (isEndgame ? 100 : 50);
+
+            // Flanking bonus - prefer positions that allow flanking attacks
+            var flankingOpportunities = enemies.Count(e => 
+                position.DistanceTo(e.Position) <= unit.AttackRange &&
+                Map.HasLineOfSight(position, e.Position) &&
+                CanFlankFromPosition(position, e));
+            score += flankingOpportunities * 25;
 
             // Defense bonus from terrain
             score += Map.GetDefenseBonus(position);
+
+            // High ground advantage for snipers
+            if (unit.UnitType == UnitType.Sniper && Map.Terrain.TryGetValue(position, out var terrain) && terrain == TerrainType.Hill)
+            {
+                score += 30; // Snipers love high ground
+            }
 
             // Unit type specific positioning
             score += GetUnitTypePositionBonus(unit, position, enemies);
@@ -517,9 +767,11 @@ namespace HexWargame.Core
             var friendlyUnits = GetTeamUnits(unit.Team);
             score += GetFormationBonus(unit, position, friendlyUnits);
 
-            // Penalty for being in enemy attack range
+            // Penalty for being in enemy attack range (but only if they have LOS)
             var enemiesInRange = enemies.Count(e => 
-                position.DistanceTo(e.Position) <= e.AttackRange && e.CanAttack);
+                position.DistanceTo(e.Position) <= e.AttackRange && 
+                e.CanAttack &&
+                Map.HasLineOfSight(e.Position, position));
             score -= enemiesInRange * (isEndgame ? 30 : 20);
 
             // Distance consideration (closer is generally better, but not too close for ranged units)
@@ -528,9 +780,13 @@ namespace HexWargame.Core
             
             if (unit.UnitType == UnitType.Sniper)
             {
-                // Snipers prefer medium range
+                // Snipers prefer medium range with line of sight
                 var idealRange = unit.AttackRange - 1;
                 score += Math.Max(0, 20 - Math.Abs(distanceToClosest - idealRange) * 5);
+                
+                // Extra bonus if position provides LOS to multiple enemies
+                var visibleEnemies = enemies.Count(e => Map.HasLineOfSight(position, e.Position));
+                score += visibleEnemies * 10;
             }
             else
             {
@@ -539,6 +795,23 @@ namespace HexWargame.Core
             }
 
             return score;
+        }
+
+        private bool CanFlankFromPosition(HexCoord attackerPos, Unit target)
+        {
+            // Simple flanking check - attacking from sides based on target's facing
+            // For AI purposes, assume units face towards the center of enemy forces
+            var enemyTeam = target.Team == Team.Red ? Team.Blue : Team.Red;
+            var enemyUnits = GetTeamUnits(enemyTeam);
+            
+            if (!enemyUnits.Any()) return false;
+            
+            // Calculate average enemy position as "facing direction"
+            var avgEnemyQ = enemyUnits.Average(u => u.Position.Q);
+            var avgEnemyR = enemyUnits.Average(u => u.Position.R);
+            var enemyCenter = new HexCoord((int)Math.Round(avgEnemyQ), (int)Math.Round(avgEnemyR));
+            
+            return Map.CanFlank(attackerPos, target.Position, enemyCenter);
         }
 
         private double GetUnitTypePositionBonus(Unit unit, HexCoord position, List<Unit> enemies)
@@ -693,5 +966,280 @@ namespace HexWargame.Core
                 ["GameStartTime"] = GameStartTime
             };
         }
+
+        /// <summary>
+        /// Use a unit's special ability
+        /// </summary>
+        public bool UseUnitAbility(Unit unit, HexCoord? targetPos = null, Unit? targetUnit = null)
+        {
+            if (!unit.CanUseAbility()) return false;
+
+            ChangeState(GameState.AbilityPhase);
+
+            switch (unit.Ability.Type)
+            {
+                case AbilityType.MedicHeal:
+                    return UseMedicHeal(unit, targetUnit);
+                    
+                case AbilityType.SniperOverwatch:
+                    return UseSniperOverwatch(unit);
+                    
+                case AbilityType.HeavySuppression:
+                    return UseHeavySuppressionFire(unit, targetPos ?? unit.Position);
+                    
+                case AbilityType.InfantryRush:
+                    return UseInfantryRush(unit);
+                    
+                default:
+                    return false;
+            }
+        }
+
+        private bool UseMedicHeal(Unit medic, Unit? target)
+        {
+            if (target == null || target.Team != medic.Team || !target.IsAlive)
+                return false;
+                
+            if (medic.Position.DistanceTo(target.Position) > medic.Ability.Range)
+                return false;
+                
+            target.Heal(30);
+            medic.Ability.Use();
+            return true;
+        }
+
+        private bool UseSniperOverwatch(Unit sniper)
+        {
+            sniper.IsOnOverwatch = true;
+            sniper.Ability.Use();
+            return true;
+        }
+
+        private bool UseHeavySuppressionFire(Unit heavy, HexCoord targetArea)
+        {
+            var affectedUnits = Map.Units.Values
+                .Where(u => u.Team != heavy.Team && 
+                           u.IsAlive && 
+                           targetArea.DistanceTo(u.Position) <= 2)
+                .ToList();
+                
+            foreach (var unit in affectedUnits)
+            {
+                unit.ApplySuppression(2);
+            }
+            
+            heavy.Ability.Use();
+            return true;
+        }
+
+        private bool UseInfantryRush(Unit infantry)
+        {
+            // Sprint ability - extra movement is handled in GetEffectiveMovement
+            infantry.Ability.Use();
+            return true;
+        }
+
+        private async Task ExecuteAbilityPhase(Unit unit, bool isEndgame)
+        {
+            if (!unit.CanUseAbility()) return;
+
+            switch (unit.UnitType)
+            {
+                case UnitType.Medic:
+                    await ConsiderMedicHealing(unit);
+                    break;
+                    
+                case UnitType.Sniper:
+                    await ConsiderSniperOverwatch(unit, isEndgame);
+                    break;
+                    
+                case UnitType.Heavy:
+                    await ConsiderHeavySuppression(unit);
+                    break;
+                    
+                case UnitType.Infantry:
+                    await ConsiderInfantryRush(unit, isEndgame);
+                    break;
+            }
+        }
+
+        private async Task ConsiderMedicHealing(Unit medic)
+        {
+            var friendlyUnits = GetTeamUnits(medic.Team)
+                .Where(u => u != medic && u.IsAlive && u.CurrentHp < u.MaxHp * 0.6f)
+                .Where(u => medic.Position.DistanceTo(u.Position) <= medic.Ability.Range)
+                .OrderBy(u => (float)u.CurrentHp / u.MaxHp)
+                .ToList();
+
+            if (friendlyUnits.Any())
+            {
+                UseUnitAbility(medic, targetUnit: friendlyUnits.First());
+                await Task.Delay(1000);
+            }
+        }
+
+        private async Task ConsiderSniperOverwatch(Unit sniper, bool isEndgame)
+        {
+            var enemies = GetTeamUnits(Team.Red);
+            var threatsNearby = enemies.Count(e => sniper.Position.DistanceTo(e.Position) <= sniper.AttackRange + 2);
+            
+            // Use overwatch if enemies are approaching and it's not endgame (need to be aggressive in endgame)
+            if (threatsNearby >= 2 && !isEndgame)
+            {
+                UseUnitAbility(sniper);
+                await Task.Delay(800);
+            }
+        }
+
+        private async Task ConsiderHeavySuppression(Unit heavy)
+        {
+            var enemies = GetTeamUnits(Team.Red);
+            var targetArea = GetBestSuppressionTarget(heavy, enemies);
+            
+            if (targetArea.HasValue)
+            {
+                UseUnitAbility(heavy, targetPos: targetArea.Value);
+                await Task.Delay(1000);
+            }
+        }
+
+        private async Task ConsiderInfantryRush(Unit infantry, bool isEndgame)
+        {
+            // Use sprint in endgame or when need to close distance quickly
+            if (isEndgame)
+            {
+                var enemies = GetTeamUnits(Team.Red);
+                var closestEnemy = enemies.OrderBy(e => infantry.Position.DistanceTo(e.Position)).FirstOrDefault();
+                
+                if (closestEnemy != null && infantry.Position.DistanceTo(closestEnemy.Position) > 4)
+                {
+                    UseUnitAbility(infantry);
+                    await Task.Delay(600);
+                }
+            }
+        }
+
+        private HexCoord? GetBestSuppressionTarget(Unit heavy, List<Unit> enemies)
+        {
+            var bestScore = 0;
+            HexCoord? bestTarget = null;
+
+            foreach (var enemy in enemies)
+            {
+                if (heavy.Position.DistanceTo(enemy.Position) > heavy.Ability.Range) continue;
+                
+                var affectedCount = enemies.Count(e => enemy.Position.DistanceTo(e.Position) <= 2);
+                if (affectedCount > bestScore)
+                {
+                    bestScore = affectedCount;
+                    bestTarget = enemy.Position;
+                }
+            }
+
+            return bestScore >= 2 ? bestTarget : null;
+        }
+
+        // Add this to your AI turn execution
+        private async Task ExecuteAbilityPhase()
+        {
+            foreach (var unit in GetTeamUnits(Team.Blue).Where(u => u.CanUseAbility()))
+            {
+                await Task.Delay(400); // Slight delay for visual feedback
+                
+                switch (unit.UnitType)
+                {
+                    case UnitType.Medic:
+                        ExecuteAIMedicAbility(unit);
+                        break;
+                        
+                    case UnitType.Sniper:
+                        ExecuteAISniperAbility(unit);
+                        break;
+                        
+                    case UnitType.Heavy:
+                        ExecuteAIHeavyAbility(unit);
+                        break;
+                        
+                    case UnitType.Infantry:
+                        ExecuteAIInfantryAbility(unit);
+                        break;
+                }
+            }
+        }
+
+        private void ExecuteAIMedicAbility(Unit medic)
+        {
+            // Find the most wounded friendly unit in range
+            var woundedAllies = Map.Units.Values
+                .Where(u => u.Team == medic.Team 
+                    && u.IsAlive 
+                    && u.Position.DistanceTo(medic.Position) <= medic.Ability.Range
+                    && u.CurrentHp < u.MaxHp)
+                .OrderBy(u => (float)u.CurrentHp / u.MaxHp) // Most wounded first
+                .ToList();
+                
+            if (woundedAllies.Any())
+            {
+                ExecuteAbility(medic, woundedAllies.First().Position);
+            }
+        }
+
+        private void ExecuteAISniperAbility(Unit sniper)
+        {
+            // Use overwatch if enemies are approaching but not yet in attack range
+            var nearbyEnemies = Map.Units.Values
+                .Where(u => u.Team != sniper.Team && u.IsAlive)
+                .ToList();
+                
+            var enemiesApproaching = nearbyEnemies.Any(e => 
+                e.Position.DistanceTo(sniper.Position) > sniper.AttackRange &&
+                e.Position.DistanceTo(sniper.Position) <= sniper.AttackRange + 2);
+                
+            if (enemiesApproaching)
+            {
+                ExecuteAbility(sniper, sniper.Position);
+            }
+        }
+
+        private void ExecuteAIHeavyAbility(Unit heavy)
+        {
+            // Use suppression if multiple enemies are clustered
+            var enemyClusters = Map.Units.Values
+                .Where(u => u.Team != heavy.Team && u.IsAlive)
+                .GroupBy(e => e.Position)
+                .Where(g => g.Count() >= 2 || g.Key.DistanceTo(heavy.Position) <= 2)
+                .ToList();
+                
+            if (enemyClusters.Any())
+            {
+                ExecuteAbility(heavy, heavy.Position);
+            }
+        }
+
+        private void ExecuteAIInfantryAbility(Unit infantry)
+        {
+            // Use sprint if there are enemies to chase or objectives to reach
+            var nearestEnemy = Map.Units.Values
+                .Where(u => u.Team != infantry.Team && u.IsAlive)
+                .OrderBy(e => e.Position.DistanceTo(infantry.Position))
+                .FirstOrDefault();
+                
+            if (nearestEnemy != null && 
+                nearestEnemy.Position.DistanceTo(infantry.Position) > infantry.AttackRange &&
+                nearestEnemy.Position.DistanceTo(infantry.Position) <= infantry.AttackRange + 5)
+            {
+                ExecuteAbility(infantry, infantry.Position);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Holds the result of an ability execution
+    /// </summary>
+    public class AbilityResult
+    {
+        public Unit User { get; set; } = null!;
+        public AbilityType AbilityType { get; set; }
+        public HexCoord TargetCoord { get; set; }
     }
 }

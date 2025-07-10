@@ -13,6 +13,8 @@ namespace HexWargame.UI
         private Unit? _selectedUnit;
         private List<HexCoord> _validMoves = new();
         private List<Unit> _validTargets = new();
+        private List<HexCoord> _validAbilityTargets = new();
+        private bool _abilityMode = false;
         
         // Rendering settings
         private float _hexSize = 30f;
@@ -26,6 +28,7 @@ namespace HexWargame.UI
         private readonly Color _selectedColor = Color.Yellow;
         private readonly Color _validMoveColor = Color.LightGreen;
         private readonly Color _validAttackColor = Color.LightCoral;
+        private readonly Color _validAbilityColor = Color.Cyan;
         
         // Center offset for rendering
         private PointF _offset = new(200, 200);
@@ -135,24 +138,39 @@ namespace HexWargame.UI
 
         private void DrawValidActions(Graphics g)
         {
-            // Draw valid moves
-            foreach (var coord in _validMoves)
+            // Draw valid moves (only if not in ability mode)
+            if (!_abilityMode)
             {
-                var center = GetHexCenter(coord);
-                var hexPath = CreateHexPath(center);
-                
-                using var brush = new SolidBrush(Color.FromArgb(128, _validMoveColor));
-                g.FillPath(brush, hexPath);
-            }
+                foreach (var coord in _validMoves)
+                {
+                    var center = GetHexCenter(coord);
+                    var hexPath = CreateHexPath(center);
+                    
+                    using var brush = new SolidBrush(Color.FromArgb(128, _validMoveColor));
+                    g.FillPath(brush, hexPath);
+                }
 
-            // Draw valid attack targets
-            foreach (var target in _validTargets)
+                // Draw valid attack targets
+                foreach (var target in _validTargets)
+                {
+                    var center = GetHexCenter(target.Position);
+                    var hexPath = CreateHexPath(center);
+                    
+                    using var brush = new SolidBrush(Color.FromArgb(128, _validAttackColor));
+                    g.FillPath(brush, hexPath);
+                }
+            }
+            else
             {
-                var center = GetHexCenter(target.Position);
-                var hexPath = CreateHexPath(center);
-                
-                using var brush = new SolidBrush(Color.FromArgb(128, _validAttackColor));
-                g.FillPath(brush, hexPath);
+                // Draw valid ability targets
+                foreach (var coord in _validAbilityTargets)
+                {
+                    var center = GetHexCenter(coord);
+                    var hexPath = CreateHexPath(center);
+                    
+                    using var brush = new SolidBrush(Color.FromArgb(128, _validAbilityColor));
+                    g.FillPath(brush, hexPath);
+                }
             }
         }
 
@@ -291,16 +309,45 @@ namespace HexWargame.UI
             if (!clickedHex.HasValue) return;
 
             var coord = clickedHex.Value;
+            var wasSelectedUnit = _selectedUnit;
             
-            // If we have a selected unit and clicked on a valid move
-            if (_selectedUnit != null && _validMoves.Contains(coord))
+            // Handle ability mode
+            if (_selectedUnit != null && _abilityMode && _validAbilityTargets.Contains(coord))
+            {
+                if (_game.ExecuteAbility(_selectedUnit, coord))
+                {
+                    ExitAbilityMode();
+                    
+                    // Check if we clicked on a unit (self-target or friendly unit)
+                    var clickedUnit = _game.Map.GetUnitAt(coord);
+                    if (clickedUnit != null && clickedUnit.Team == _game.CurrentTeam)
+                    {
+                        // Keep the clicked unit selected for better UX
+                        SelectedUnit = clickedUnit;
+                        UnitSelected?.Invoke(this, clickedUnit);
+                    }
+                    else if (coord == wasSelectedUnit?.Position)
+                    {
+                        // Self-targeted ability - keep original unit selected
+                        SelectedUnit = wasSelectedUnit;
+                        UnitSelected?.Invoke(this, wasSelectedUnit);
+                    }
+                    
+                    UpdateValidActions();
+                    Invalidate();
+                }
+                return;
+            }
+            
+            // Handle movement
+            if (_selectedUnit != null && !_abilityMode && _validMoves.Contains(coord))
             {
                 _game.MoveUnit(_selectedUnit, coord);
                 return;
             }
 
-            // If we have a selected unit and clicked on a valid target
-            if (_selectedUnit != null)
+            // Handle attacks
+            if (_selectedUnit != null && !_abilityMode)
             {
                 var target = _validTargets.FirstOrDefault(t => t.Position == coord);
                 if (target != null)
@@ -310,7 +357,7 @@ namespace HexWargame.UI
                 }
             }
 
-            // Try to select a unit at clicked position
+            // Handle unit selection - this now works consistently after abilities
             var unit = _game.Map.GetUnitAt(coord);
             if (unit != null && unit.Team == _game.CurrentTeam)
             {
@@ -338,17 +385,49 @@ namespace HexWargame.UI
         {
             _validMoves.Clear();
             _validTargets.Clear();
+            _validAbilityTargets.Clear();
 
             if (_selectedUnit != null && _game != null)
             {
-                _validMoves = _game.GetValidMoves(_selectedUnit);
-                _validTargets = _game.GetAttackTargets(_selectedUnit);
+                if (!_abilityMode)
+                {
+                    _validMoves = _game.GetValidMoves(_selectedUnit);
+                    _validTargets = _game.GetAttackTargets(_selectedUnit);
+                }
+                else
+                {
+                    _validAbilityTargets = _game.GetValidAbilityTargets(_selectedUnit);
+                }
             }
+        }
+
+        /// <summary>
+        /// Toggle ability mode for the selected unit
+        /// </summary>
+        public void ToggleAbilityMode()
+        {
+            if (_selectedUnit?.CanUseAbility() == true)
+            {
+                _abilityMode = !_abilityMode;
+                UpdateValidActions();
+                Invalidate();
+            }
+        }
+
+        /// <summary>
+        /// Exit ability mode
+        /// </summary>
+        public void ExitAbilityMode()
+        {
+            _abilityMode = false;
+            UpdateValidActions();
+            Invalidate();
         }
 
         public void ClearSelection()
         {
             SelectedUnit = null;
+            _abilityMode = false;
         }
 
         private void OnUnitMoved(object? sender, Unit unit)
@@ -430,6 +509,28 @@ namespace HexWargame.UI
         {
             // This could be implemented for zoom functionality
             // For now, we'll keep it simple with fixed zoom
+        }
+
+        /// <summary>
+        /// Check if the control is currently in ability targeting mode
+        /// </summary>
+        public bool IsInAbilityMode => _abilityMode;
+
+        /// <summary>
+        /// Select a specific unit and update the UI accordingly
+        /// </summary>
+        /// <param name="unit">Unit to select, or null to clear selection</param>
+        public void SelectUnit(Unit? unit)
+        {
+            if (unit != null && _game?.Map.GetUnitAt(unit.Position) == unit)
+            {
+                SelectedUnit = unit;
+                UnitSelected?.Invoke(this, unit);
+            }
+            else
+            {
+                ClearSelection();
+            }
         }
     }
 }
